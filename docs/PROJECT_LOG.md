@@ -1,16 +1,16 @@
 # Project Log
 
 ## Status (always latest)
-- Completion: 35% (Phase 1 + Phase 2 + Phase 3 complete)
-- Phase: Phase 3 complete, moving to Phase 4 (GUI)
-- Active milestone: Flutter GUI — device list, send/accept popup, progress bar (Phase 4)
+- Completion: ~55% (Phases 1-4 complete)
+- Phase: Phase 4 complete, moving to Phase 5 (Polish)
+- Active milestone: Phase 5 planning
 - Network strategy locked: private Wi-Fi first, router Wi-Fi fallback (Decision 006)
 - GUI framework locked: Flutter (Decision 007)
 - Engine language locked: Dart (Decision 008)
 - File transfer method locked: file-by-file, multi-file supported (Decision 009)
-- Active milestone: Flutter GUI scaffold setup (Phase 4) — engine code restructured and ready
-- Active milestone: Flutter device list screen (Phase 4)
-- Active milestone: Send file flow (Phase 4)
+- Transfer queueing locked: FIFO, one at a time on receiver (Decision 010)
+- Cert exchange locked: automatic via plain-TCP CertServer (Decision 011)
+- Accept/reject locked: onIncomingRequest hook before any file write (Decision 012)
 
 ## Completed Work
 - Created `broadcaster.dart` and `listener.dart` for UDP discovery (Phase 1)
@@ -121,3 +121,15 @@ See TASK_BOARD.md.
 **Files Modified:** lib/engine/cert_exchange.dart (new), lib/engine/file_receiver.dart, fetch_cert_test.dart (new)
 **Decisions Made:** 011 (automatic plain-TCP cert exchange)
 **Remaining Work:** Build the actual send file flow in Flutter — file picker → pick device → fetchCert(device.ip) → FileSender
+
+### Session 2026-06-22 (Send File Flow)
+**Summary:** Built lib/screens/send_screen.dart — full send flow: file_picker for file selection, pushes DeviceListScreen to pick a target device, calls fetchCert() automatically to get the device's certificate (Decision 011), writes it to a temp file, then hands off to the existing FileSender unchanged. Added file_picker dependency to pubspec.yaml. Added a simple HomeScreen in main.dart with "Send a File" and "Nearby Devices" buttons. During testing, found that receiver.dart only runs FileReceiver (TLS server + cert server) and never broadcasts its own presence — had to run broadcaster.dart in a second terminal alongside it for the device to show up in discovery. Logged as a gap, not fixed yet. Full send flow tested end-to-end on Linux desktop: picked a file, picked the discovered device, cert fetched automatically, file transferred with live progress bar, and the received file was confirmed byte-identical to the original.
+**Files Modified:** pubspec.yaml, lib/main.dart, lib/screens/send_screen.dart (new)
+**Decisions Made:** none (built on top of Decision 011, no new architecture decisions)
+**Remaining Work:** Fix receiver.dart to also broadcast (combine broadcaster + receiver into one running unit). Build accept/reject popup. Add progress bar to receiver side.
+
+### Session 2026-06-22 (Accept/Reject + Receiver Broadcasting)
+**Summary:** Added onIncomingRequest hook to FileReceiver — an optional callback awaited after the header is parsed but before any file write begins; returning false rejects with zero bytes written. Fully backward compatible (CLI receiver.dart needed no changes since the callback defaults to auto-accept when not provided). Built lib/screens/receive_screen.dart, which runs DiscoveryBroadcaster and FileReceiver together as one unit — closing the earlier-found gap where receiver.dart never broadcast its own presence. Added path_provider dependency to resolve a per-app documents directory for cert/key/received-files storage (GUI has no CLI args to pass these). Added a third "Receive Files" button to main.dart. Fixed one compile error (missing null-check operator on filename in a TransferProgress call). Tested end-to-end: receive screen broadcasts and is discoverable, accept/reject popup appears correctly before any write, rejecting produces zero file output, accepting completes the transfer with live progress and byte-correct output.
+**Files Modified:** lib/engine/file_receiver.dart, lib/screens/receive_screen.dart (new), lib/main.dart, pubspec.yaml
+**Decisions Made:** 012 (accept/reject before file write)
+**Remaining Work:** Phase 4 complete. Begin Phase 5 — pause/resume, folder support, transfer history, error handling polish.

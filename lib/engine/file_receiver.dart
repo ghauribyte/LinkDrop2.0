@@ -35,6 +35,22 @@ class FileReceiver {
   final void Function(String filename)? onComplete;
   final void Function(String message)? onError;
 
+  /// Called once the incoming file's name and size are known, before
+  /// any bytes are written to disk. Return true to accept and start
+  /// writing the file, false to reject — in which case nothing is
+  /// written and the connection is closed.
+  ///
+  /// Optional — if not provided, behaves exactly as before (auto-accept,
+  /// no behavior change), which keeps the CLI receiver.dart working
+  /// unchanged. The GUI passes this to show an accept/reject popup.
+  final Future<bool> Function(String filename, int size, String senderIp)?
+      onIncomingRequest;
+
+  /// How long to wait for an accept/reject decision before giving up
+  /// and rejecting automatically. Prevents a sender being stuck forever
+  /// if nobody looks at the popup.
+  final Duration requestTimeout;
+
   /// Max time a connection will wait in queue before being dropped.
   /// Prevents one stuck/slow sender from blocking everyone forever.
   final Duration queueTimeout;
@@ -58,12 +74,14 @@ class FileReceiver {
     this.port = 7979,
     this.certServerPort = 7980,
     this.queueTimeout = const Duration(minutes: 5),
+    this.requestTimeout = const Duration(seconds: 60),
     this.onStatus,
     this.onConnection,
     this.onQueued,
     this.onProgress,
     this.onComplete,
     this.onError,
+    this.onIncomingRequest,
   });
 
   bool get isRunning => _running;
@@ -163,6 +181,7 @@ class FileReceiver {
   }
 
   Future<void> _handleConnection(SecureSocket socket) async {
+    final senderIp = socket.remoteAddress.address;
     try {
       final bytesBuilder = BytesBuilder();
       int? headerLength;
@@ -172,8 +191,16 @@ class FileReceiver {
       int? totalSize;
       int fileBytesReceived = 0;
       bool headerParsed = false;
+      bool rejected = false;
+
+      // Bytes that arrive in the same chunk as the header tail need to
+      // be held until the accept/reject decision is made, then either
+      // written (accepted) or discarded (rejected).
+      List<int>? pendingBytesAfterHeader;
 
       await for (final data in socket) {
+        if (rejected) break;
+
         if (!headerParsed) {
           bytesBuilder.add(data);
 
@@ -192,15 +219,37 @@ class FileReceiver {
             header = jsonDecode(jsonStr);
             filename = header!['filename'];
             totalSize = header['size'];
+            headerParsed = true;
+            pendingBytesAfterHeader = buffer.sublist(headerLength);
+
+            // Ask whoever set up this receiver whether to accept this
+            // file — the GUI shows a popup here; the CLI (no callback
+            // provided) accepts automatically, same as before.
+            bool accepted = true;
+            if (onIncomingRequest != null) {
+              try {
+                accepted = await onIncomingRequest!(
+                  filename!,
+                  totalSize!,
+                  senderIp,
+                ).timeout(requestTimeout);
+              } catch (_) {
+                accepted = false; // timed out or threw — treat as reject
+              }
+            }
+
+            if (!accepted) {
+              rejected = true;
+              onError?.call('Transfer of "$filename" from $senderIp was rejected.');
+              break;
+            }
 
             final file = File('${targetDir.path}/$filename');
             fileSink = file.openWrite();
-            headerParsed = true;
 
-            final remaining = buffer.sublist(headerLength);
-            if (remaining.isNotEmpty) {
-              fileSink.add(remaining);
-              fileBytesReceived += remaining.length;
+            if (pendingBytesAfterHeader.isNotEmpty) {
+              fileSink.add(pendingBytesAfterHeader);
+              fileBytesReceived += pendingBytesAfterHeader.length;
               onProgress?.call(TransferProgress(
                 filename: filename!,
                 bytesDone: fileBytesReceived,
@@ -217,6 +266,10 @@ class FileReceiver {
             totalBytes: totalSize!,
           ));
         }
+      }
+
+      if (rejected) {
+        return;
       }
 
       if (fileSink != null) {
