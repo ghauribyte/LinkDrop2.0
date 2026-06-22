@@ -1,0 +1,43 @@
+# TLS certificates and private keys
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+
+# Test files
+test.txt
+*.bin
+large.*
+
+# Received files folder
+received/
+
+# Dart/Flutter build artifacts
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+build/
+.packages
+pubspec.lock
+
+# IDE and editor files
+.vscode/
+.idea/
+*.iml
+*.ipr
+*.iws
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Environment and secrets
+.env
+*.secret
+secrets/
+
+# OS files
+.DS_Store
+desktop.ini
