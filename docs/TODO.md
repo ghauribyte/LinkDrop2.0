@@ -74,13 +74,13 @@ Since there are no accounts, trust is established by certificate fingerprint:
 4. If it doesn't match, sender aborts the connection immediately with a clear error message
 
 ### Definition of done
-- [ ] `receiver.dart` accepts only TLS connections — plain TCP connections are rejected
-- [ ] `sender.dart` verifies the receiver's certificate fingerprint before sending any data
-- [ ] Mismatched cert causes sender to abort with a clear error, not silently send
-- [ ] File transfer still works correctly end-to-end after adding TLS (byte-for-byte match)
-- [ ] Tested on same machine first (loopback), then two physical devices
-- [ ] `openssl` commands for cert generation are documented and confirmed working
-- [ ] Ctrl+C still cleans up correctly on both sides
+- [x] `receiver.dart` accepts only TLS connections — plain TCP connections are rejected
+- [x] `sender.dart` verifies the receiver's certificate fingerprint before sending any data
+- [ ] Mismatched cert causes sender to abort with a clear error, not silently send ← **pending test**
+- [x] File transfer still works correctly end-to-end after adding TLS (byte-for-byte match)
+- [ ] Tested on same machine first (loopback) ✅, then two physical devices ← **pending**
+- [x] `openssl` commands for cert generation are documented and confirmed working
+- [x] Ctrl+C still cleans up correctly on both sides
 
 ### Not in scope yet
 - No certificate authority (CA) or certificate signing

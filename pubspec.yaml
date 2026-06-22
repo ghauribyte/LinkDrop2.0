@@ -1,0 +1,9 @@
+name: linkdrop
+description: AirDrop-style local Wi-Fi file transfer — CLI phases
+version: 0.1.0
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  crypto: ^3.0.3

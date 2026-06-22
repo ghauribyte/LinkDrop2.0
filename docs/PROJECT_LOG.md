@@ -1,9 +1,9 @@
 # Project Log
 
 ## Status (always latest)
-- Completion: 20% (Phase 1 + Phase 2 complete)
-- Phase: Phase 2 complete, moving to Phase 3 (Security / TLS)
-- Active milestone: TLS + device verification (Phase 3)
+- Completion: 35% (Phase 1 + Phase 2 + Phase 3 complete)
+- Phase: Phase 3 complete, moving to Phase 4 (GUI)
+- Active milestone: Flutter GUI — device list, send/accept popup, progress bar (Phase 4)
 - Network strategy locked: private Wi-Fi first, router Wi-Fi fallback (Decision 006)
 - GUI framework locked: Flutter (Decision 007)
 - Engine language locked: Dart (Decision 008)
@@ -15,20 +15,24 @@
 - Dart 3.12.2 installed and confirmed working on Ubuntu 24.04
 - Tested Phase 2 transfer on loopback (127.0.0.1) — file arrived intact
 - Fixed port 7979 already-in-use error during Phase 2 testing
+- Updated `receiver.dart` to use `SecureServerSocket` with TLS (Phase 3)
+- Updated `sender.dart` to use `SecureSocket` with SHA-256 cert fingerprint verification (Phase 3)
+- Added `pubspec.yaml` with `crypto: ^3.0.3` dependency (first external dep in project)
+- Generated self-signed cert + key pair with openssl, confirmed working
+- Tested TLS transfer on loopback — file arrived intact, TLS confirmed active
 
 ## Current Architecture
 See ARCHITECTURE.md. Summary: GUI Layer, Discovery Service, Transfer Engine, Security Module, Network Layer.
-Tech stack: Flutter + Dart. Discovery: UDP broadcast. Transfer: TCP sockets (TLS coming in Phase 3).
+Tech stack: Flutter + Dart. Discovery: UDP broadcast. Transfer: TCP sockets wrapped in TLS (Phase 3 complete).
 
 ## Current Tasks
 See TASK_BOARD.md.
 
 ## Next Recommended Tasks
-- Re-confirm Phase 1 (broadcaster/listener) actually runs on loopback — it was checked off as done before Dart was installed on the machine, so it may not have been tested for real yet
-- Generate self-signed TLS certificates (`openssl req ...`)
-- Update `receiver.dart` to use `SecureServerSocket`
-- Update `sender.dart` to use `SecureSocket` with cert fingerprint verification
-- Test TLS transfer on loopback, then two physical devices
+- Test mismatched cert rejection on loopback (generate a second cert pair, pass wrong cert to sender)
+- Test TLS transfer on two physical devices on the same Wi-Fi
+- Re-confirm Phase 1 (broadcaster/listener) actually runs on loopback — checked off before Dart was installed
+- Begin Phase 4: Flutter GUI (device list, send/accept popup, progress bar)
 
 ## Session History
 
@@ -73,6 +77,12 @@ See TASK_BOARD.md.
 **Files Modified:** sender.dart, receiver.dart, docs/TODO.md, docs/PROJECT_LOG.md, docs/TASK_BOARD.md
 **Decisions Made:** none (all decisions remain as logged)
 **Remaining Work:** Phase 3 — add TLS to sender/receiver, implement cert fingerprint verification
+
+### Session 2026-06-22 (Phase 3 — TLS Implementation)
+**Summary:** Implemented Phase 3 TLS + device verification. Updated `receiver.dart` to use `SecureServerSocket` with a `SecurityContext` loaded from `cert.pem` + `key.pem` passed as CLI args. Updated `sender.dart` to use `SecureSocket` with a `SecurityContext` trusting only the receiver's cert; `onBadCertificate` callback computes SHA-256 fingerprint of the presented cert and compares against the fingerprint derived from the cert file on disk — aborts with a clear error on mismatch. Added `pubspec.yaml` with `crypto: ^3.0.3` as the first project dependency. All file transfer logic after the connection is unchanged from Phase 2. Ran `dart pub get` (resolved crypto 3.0.7 + transitive deps collection, typed_data). Generated cert/key pair with openssl. Tested TLS transfer on loopback — confirmed working end-to-end.
+**Files Modified:** receiver.dart, sender.dart, pubspec.yaml (new), docs/PROJECT_LOG.md, docs/TASK_BOARD.md, docs/TODO.md
+**Decisions Made:** none (implementation follows Decision 002 and Decision 003 as specced)
+**Remaining Work:** Test mismatched cert rejection; test on two physical devices; begin Phase 4 (Flutter GUI)
 
 ### Session 2026-06-20 (Doc Review)
 **Summary:** Reviewed the full repo (all docs + actual code) for consistency. Confirmed `broadcaster.dart`, `listener.dart`, `sender.dart`, `receiver.dart` all match their specs on code review. Found and fixed two gaps: ROADMAP.md status table was stale (still showed all phases "Not started"), and DECISIONS.md was missing Decisions 007-009 even though other docs already treated them as locked. Flagged that Phase 1's "confirmed on loopback" checkbox predates the Dart install, so it may not have been truly tested.
