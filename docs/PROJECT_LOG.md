@@ -24,6 +24,7 @@ Tech stack: Flutter + Dart. Discovery: UDP broadcast. Transfer: TCP sockets (TLS
 See TASK_BOARD.md.
 
 ## Next Recommended Tasks
+- Re-confirm Phase 1 (broadcaster/listener) actually runs on loopback — it was checked off as done before Dart was installed on the machine, so it may not have been tested for real yet
 - Generate self-signed TLS certificates (`openssl req ...`)
 - Update `receiver.dart` to use `SecureServerSocket`
 - Update `sender.dart` to use `SecureSocket` with cert fingerprint verification
@@ -72,3 +73,9 @@ See TASK_BOARD.md.
 **Files Modified:** sender.dart, receiver.dart, docs/TODO.md, docs/PROJECT_LOG.md, docs/TASK_BOARD.md
 **Decisions Made:** none (all decisions remain as logged)
 **Remaining Work:** Phase 3 — add TLS to sender/receiver, implement cert fingerprint verification
+
+### Session 2026-06-20 (Doc Review)
+**Summary:** Reviewed the full repo (all docs + actual code) for consistency. Confirmed `broadcaster.dart`, `listener.dart`, `sender.dart`, `receiver.dart` all match their specs on code review. Found and fixed two gaps: ROADMAP.md status table was stale (still showed all phases "Not started"), and DECISIONS.md was missing Decisions 007-009 even though other docs already treated them as locked. Flagged that Phase 1's "confirmed on loopback" checkbox predates the Dart install, so it may not have been truly tested.
+**Files Modified:** docs/ROADMAP.md, docs/DECISIONS.md, docs/PROJECT_LOG.md
+**Decisions Made:** none (documentation consistency fixes only)
+**Remaining Work:** Re-verify Phase 1 actually runs, then build Phase 3 (TLS + device verification) per TODO.md

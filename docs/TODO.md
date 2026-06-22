@@ -7,7 +7,7 @@
 - [x] `broadcaster.dart` sends a packet every 2 seconds with name + id
 - [x] `listener.dart` receives and prints found devices with the correct IP
 - [x] No duplicate spam for the same device in listener output
-- [x] Confirmed working on same machine (loopback)
+- [x] Confirmed working on same machine (loopback) — **needs re-check, see Pending Review on TASK_BOARD.md**
 - [x] Ctrl+C cleanly stops both scripts, no crash
 
 ---

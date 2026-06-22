@@ -42,9 +42,28 @@ Decision: Try to set up a private device-to-device Wi-Fi connection first (Wi-Fi
 Reason: Gives the best possible speed where supported (Android, Windows, Linux), but still works everywhere, including iOS and macOS, where private Wi-Fi connections aren't allowed for third-party apps
 Consequences: Two network code paths to build and test instead of one. Needs a check at connect-time to decide which mode to use. iOS/macOS will always use router Wi-Fi, never private mode
 
+## Decision 007
+Date: 2026-06-20
+Topic: GUI framework
+Decision: Use Flutter for the app (Android, iOS, Windows, macOS, Linux from one codebase)
+Reason: Phones are in scope. Electron has no phone support. Flutter is the only option that covers phones and desktop together from one codebase
+Consequences: Wi-Fi Direct/hotspot and other low-level networking need small native "plugin" code per platform, wired into Flutter through platform channels
+
+## Decision 008
+Date: 2026-06-20
+Topic: Programming language for discovery + transfer engine
+Decision: Use Dart
+Reason: Flutter already requires Dart for the app. Dart's built-in `dart:io` library supports UDP, TCP, and TLS sockets directly, so the same code used for Phase 1-2 (console scripts) drops into the Flutter app later with no rewrite
+Consequences: All core networking code is written once, in one language, for every platform
+
+## Decision 009
+Date: 2026-06-20
+Topic: Folder/multi-file transfer method
+Decision: Send files one by one (file-by-file), not as a zipped folder. User can select multiple files (or a whole folder, sent as its individual files) and they queue up and send one after another over the same connection
+Reason: No wait time to zip first, no extra disk space needed, each file gets its own progress, a failed file doesn't block the rest, and pause/resume works per file instead of breaking a whole zip
+Consequences: Need a small file list/manifest sent first (names, sizes, count) so the receiver knows what's coming and can show progress per file and overall
+
 ---
 
 ## Pending Decisions (need to be made before coding starts)
-- GUI framework: Electron vs Qt vs Flutter (Flutter recommended since phones are in scope — Electron has no phone support)
-- Programming language for discovery + transfer engine
-- Folder transfer approach: zip vs file-by-file
+_(none — all core decisions made, ready to continue through the phases)_

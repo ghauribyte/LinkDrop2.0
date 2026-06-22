@@ -4,7 +4,7 @@
 _(none)_
 
 ## Pending Review
-_(none)_
+- [ ] Re-run `broadcaster.dart` + `listener.dart` for real to confirm Phase 1 actually works (checked off before Dart was installed — may not have been truly tested)
 
 ## Blocked
 _(none)_
