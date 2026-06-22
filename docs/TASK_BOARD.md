@@ -25,6 +25,8 @@ _(none)_
 - [x] Phase 3: sender.dart — SecureSocket with SHA-256 cert fingerprint verification
 - [x] Phase 3: Add pubspec.yaml with crypto dependency, run dart pub get
 - [x] Phase 3: TLS transfer confirmed working on loopback
+- [x] Restructure broadcaster/listener/sender/receiver into lib/engine/ classes (callback-based, no print/exit)
+- [x] Confirmed restructured code still works: pub get, broadcaster+listener pair, receiver+sender TLS transfer
 
 ## Next Up — Phase 4: Flutter GUI
 - [ ] Set up Flutter project scaffold

@@ -1,0 +1,697 @@
+# Architecture
+
+## Overview
+LinkDrop is an AirDrop-style app. It sends files between devices on the same Wi-Fi network. No cloud, no login — direct device-to-device transfer.
+
+## Tech Stack
+- **App framework:** Flutter (one codebase for Android, iOS, Windows, macOS, Linux)
+- **Language:** Dart (used for both the app UI and the networking engine)
+- **Discovery:** mDNS/Bonjour, UDP broadcast as fallback
+- **Transfer:** TCP sockets, file-by-file (not zipped), multiple files/folders supported per send
+- **Security:** TLS over the TCP connection, plus a device check before transfer
+- **Storage:** local only — no database, no cloud, no backend server
+
+## Modules
+1. **GUI Layer (Flutter)** — device list, send/receive buttons, progress bars, accept/reject popup
+2. **Discovery Service** — finds other devices on the local network (mDNS/Bonjour or UDP broadcast)
+3. **Transfer Engine** — sends/receives file data over TCP, one file at a time, queues multiple files/folders
+4. **Security Module** — wraps the connection in TLS, verifies the other device before sending
+5. **Network Layer** — raw networking underneath, with two modes:
+   - **Private mode**: Wi-Fi Direct or app-created hotspot (Android, Windows, Linux only)
+   - **Router mode**: existing Wi-Fi/LAN, used as fallback everywhere, and the only mode on iOS/macOS
+   - App tries private mode first, falls back to router mode automatically — no user choice needed
+
+## Data Flow
+1. App checks if private Wi-Fi mode is possible on this platform/network. If yes, sets it up. If not, uses the router Wi-Fi instead
+2. Discovery Service broadcasts presence on whichever network is active
+3. Other devices answer back, GUI shows them in a list
+4. User picks a device and files, Transfer Engine opens a TCP connection
+5. Security Module wraps it in TLS and checks the other device
+6. Receiver gets an accept/reject popup
+7. If accepted, file data streams over TCP, GUI shows progress
+8. Transfer is saved in history
+
+## Dependency Map
+```
+GUI Layer → Transfer Engine → Security Module → Network Layer
+GUI Layer → Discovery Service → Network Layer
+```
+
+## Open Items (not decided yet)
+_(none — all core decisions made)_# Decisions
+
+## Decision 001
+Date: 2026-06-20
+Topic: Discovery method
+Decision: Use mDNS/Bonjour (UDP broadcast as fallback) to find devices on the local network
+Reason: Same approach AirDrop uses. No manual setup, no central server needed
+Consequences: Both devices must be on the same Wi-Fi/subnet. Some networks block mDNS, so UDP broadcast is the backup
+
+## Decision 002
+Date: 2026-06-20
+Topic: File transfer protocol
+Decision: Use TCP sockets wrapped in TLS for sending files
+Reason: TCP is reliable for file data. TLS stops files being read or changed in transit
+Consequences: Small overhead from encryption. Need a way to verify the other device (see Decision 003)
+
+## Decision 003
+Date: 2026-06-20
+Topic: No accounts or login
+Decision: The app will not require any account or login
+Reason: Keeps it simple — 1-2 clicks to send a file
+Consequences: Device trust must be handled another way (e.g. on-screen confirm, pairing code) instead of a login
+
+## Decision 004
+Date: 2026-06-20
+Topic: No cloud relay
+Decision: All transfers go directly over the local network, never through a cloud server
+Reason: Faster, more private, no server cost
+Consequences: Transfer only works if both devices are on the same network
+
+## Decision 005
+Date: 2026-06-20
+Topic: Build order
+Decision: Build as a command-line tool first (Phases 1-2: discovery + basic transfer). Add the GUI after transfer works
+Reason: Easier to debug discovery and transfer without GUI complexity on top
+Consequences: GUI work is delayed until Phase 4
+
+## Decision 006
+Date: 2026-06-20
+Topic: Network connection mode (private Wi-Fi vs router Wi-Fi)
+Decision: Try to set up a private device-to-device Wi-Fi connection first (Wi-Fi Direct or app hotspot). If that's not possible on the platform or fails, fall back automatically to the existing Wi-Fi router/LAN. The pick happens automatically — no user action needed
+Reason: Gives the best possible speed where supported (Android, Windows, Linux), but still works everywhere, including iOS and macOS, where private Wi-Fi connections aren't allowed for third-party apps
+Consequences: Two network code paths to build and test instead of one. Needs a check at connect-time to decide which mode to use. iOS/macOS will always use router Wi-Fi, never private mode
+
+## Decision 007
+Date: 2026-06-20
+Topic: GUI framework
+Decision: Use Flutter for the app (Android, iOS, Windows, macOS, Linux from one codebase)
+Reason: Phones are in scope. Electron has no phone support. Flutter is the only option that covers phones and desktop together from one codebase
+Consequences: Wi-Fi Direct/hotspot and other low-level networking need small native "plugin" code per platform, wired into Flutter through platform channels
+
+## Decision 008
+Date: 2026-06-20
+Topic: Programming language for discovery + transfer engine
+Decision: Use Dart
+Reason: Flutter already requires Dart for the app. Dart's built-in `dart:io` library supports UDP, TCP, and TLS sockets directly, so the same code used for Phase 1-2 (console scripts) drops into the Flutter app later with no rewrite
+Consequences: All core networking code is written once, in one language, for every platform
+
+## Decision 009
+Date: 2026-06-20
+Topic: Folder/multi-file transfer method
+Decision: Send files one by one (file-by-file), not as a zipped folder. User can select multiple files (or a whole folder, sent as its individual files) and they queue up and send one after another over the same connection
+Reason: No wait time to zip first, no extra disk space needed, each file gets its own progress, a failed file doesn't block the rest, and pause/resume works per file instead of breaking a whole zip
+Consequences: Need a small file list/manifest sent first (names, sizes, count) so the receiver knows what's coming and can show progress per file and overall
+
+---
+
+## Pending Decisions (need to be made before coding starts)
+_(none — all core decisions made, ready to continue through the phases)_
+# Roadmap
+
+## Phases
+
+| Phase | Goal | What to build | Status |
+|---|---|---|---|
+| 1 | Core discovery | Devices find each other on the network, console logs only, no GUI | Complete |
+| 2 | Basic transfer | Send/receive a file over TCP between two devices, no encryption yet | Complete |
+| 3 | Security | Add TLS, add device verification before transfer | Next up |
+| 4 | GUI | Build device list, send/accept popup, progress bar | Not started |
+| 5 | Polish | Pause/resume, folder support, transfer history, error handling | Not started |
+| 6 | Cross-platform testing | Test on Windows, Mac, Linux, fix network edge cases | Not started |
+
+Suggested order: finish Phases 1-2 as a command-line tool first. Prove discovery and transfer work before adding the GUI.
+
+## Feature List
+- Auto-find nearby devices on the same Wi-Fi, no manual setup
+- Device list with name/icon
+- Send one or more files to a picked device
+- Accept/reject popup on the receiving side
+- Progress bar (% done, speed, time left)
+- Pause, resume, or cancel a transfer
+- Send whole folders, not just single files
+- Transfer history (sent/received log)
+
+## Non-Functional Goals
+- Encrypted transfer (TLS) + device verification
+- Full local network speed, no slow cloud relay
+- Recovers if Wi-Fi drops mid-transfer
+- 1-2 clicks, no account or login
+- Works the same on Windows, Mac, Linux
+- Handles multiple transfers and devices at once# Project Log
+
+## Status (always latest)
+- Completion: 35% (Phase 1 + Phase 2 + Phase 3 complete)
+- Phase: Phase 3 complete, moving to Phase 4 (GUI)
+- Active milestone: Flutter GUI — device list, send/accept popup, progress bar (Phase 4)
+- Network strategy locked: private Wi-Fi first, router Wi-Fi fallback (Decision 006)
+- GUI framework locked: Flutter (Decision 007)
+- Engine language locked: Dart (Decision 008)
+- File transfer method locked: file-by-file, multi-file supported (Decision 009)
+
+## Completed Work
+- Created `broadcaster.dart` and `listener.dart` for UDP discovery (Phase 1)
+- Created `sender.dart` and `receiver.dart` for raw TCP file transfer (Phase 2)
+- Dart 3.12.2 installed and confirmed working on Ubuntu 24.04
+- Tested Phase 2 transfer on loopback (127.0.0.1) — file arrived intact
+- Fixed port 7979 already-in-use error during Phase 2 testing
+- Updated `receiver.dart` to use `SecureServerSocket` with TLS (Phase 3)
+- Updated `sender.dart` to use `SecureSocket` with SHA-256 cert fingerprint verification (Phase 3)
+- Added `pubspec.yaml` with `crypto: ^3.0.3` dependency (first external dep in project)
+- Generated self-signed cert + key pair with openssl, confirmed working
+- Tested TLS transfer on loopback — file arrived intact, TLS confirmed active
+
+## Current Architecture
+See ARCHITECTURE.md. Summary: GUI Layer, Discovery Service, Transfer Engine, Security Module, Network Layer.
+Tech stack: Flutter + Dart. Discovery: UDP broadcast. Transfer: TCP sockets wrapped in TLS (Phase 3 complete).
+
+## Current Tasks
+See TASK_BOARD.md.
+
+## Next Recommended Tasks
+- Test mismatched cert rejection on loopback (generate a second cert pair, pass wrong cert to sender)
+- Test TLS transfer on two physical devices on the same Wi-Fi
+- Re-confirm Phase 1 (broadcaster/listener) actually runs on loopback — checked off before Dart was installed
+- Begin Phase 4: Flutter GUI (device list, send/accept popup, progress bar)
+
+## Session History
+
+### Session 2026-06-20
+**Summary:** Set up the docs folder for LinkDrop, an AirDrop-style local file transfer app. Recorded the full plan: requirements, architecture, roadmap, and first decisions. No code written yet.
+**Files Modified:** docs/ARCHITECTURE.md, docs/DECISIONS.md, docs/ROADMAP.md, docs/TASK_BOARD.md, docs/PROJECT_LOG.md
+**Decisions Made:** 001 (mDNS/UDP discovery), 002 (TCP+TLS transfer), 003 (no login), 004 (no cloud relay), 005 (build CLI first, GUI later)
+**Remaining Work:** Pick GUI framework and language, then start Phase 1 (discovery)
+
+### Session 2026-06-20 (update)
+**Summary:** Decided the network connection strategy: app tries a private device-to-device Wi-Fi connection first (Android/Windows/Linux), and falls back to the existing router Wi-Fi automatically when private mode isn't possible (always the case on iOS/macOS). Updated ARCHITECTURE.md data flow and Network Layer to reflect this.
+**Files Modified:** docs/DECISIONS.md, docs/ARCHITECTURE.md, docs/TASK_BOARD.md
+**Decisions Made:** 006 (private Wi-Fi with automatic router fallback)
+**Remaining Work:** GUI framework (Flutter recommended, not yet confirmed), language for core engine, folder transfer method
+
+### Session 2026-06-20 (update 2)
+**Summary:** Locked Flutter as the GUI framework. Recommended Dart for the engine. Defined Phase 1 build step: plain Dart UDP broadcast/listener scripts, no GUI yet.
+**Files Modified:** docs/DECISIONS.md, docs/ARCHITECTURE.md, docs/TASK_BOARD.md, docs/PROJECT_LOG.md
+**Decisions Made:** 007 (Flutter as GUI framework)
+**Remaining Work:** Confirm Dart for the engine, decide folder transfer method, then start Phase 1
+
+### Session 2026-06-20 (update 3)
+**Summary:** Confirmed Dart as engine language and file-by-file transfer method. All planning decisions closed.
+**Files Modified:** docs/DECISIONS.md, docs/ARCHITECTURE.md, docs/TASK_BOARD.md, docs/PROJECT_LOG.md
+**Decisions Made:** 008 (Dart language), 009 (file-by-file, multi-file support)
+**Remaining Work:** Start Phase 1
+
+### Session 2026-06-20 (update 4)
+**Summary:** Added Tech Stack section to ARCHITECTURE.md. Documentation clarity only.
+**Files Modified:** docs/ARCHITECTURE.md
+**Decisions Made:** none
+**Remaining Work:** Start Phase 1
+
+### Session 2026-06-20 (Phase 1 Code)
+**Summary:** Implemented `broadcaster.dart` and `listener.dart`. Updated TODO.md to check off Phase 1 requirements.
+**Files Modified:** broadcaster.dart, listener.dart, docs/TODO.md, docs/PROJECT_LOG.md
+**Decisions Made:** none
+**Remaining Work:** Phase 2 TCP transfer, finish Dart/Flutter environment setup
+
+### Session 2026-06-20 (Phase 2 + Environment)
+**Summary:** Installed Dart 3.12.2 standalone via apt (Flutter download abandoned — 1.4 GB, unnecessary for CLI phases). Implemented `sender.dart` and `receiver.dart` for raw TCP file transfer. Resolved port-in-use error during testing. Phase 2 confirmed working on loopback. Wrote Phase 3 spec into TODO.md.
+**Files Modified:** sender.dart, receiver.dart, docs/TODO.md, docs/PROJECT_LOG.md, docs/TASK_BOARD.md
+**Decisions Made:** none (all decisions remain as logged)
+**Remaining Work:** Phase 3 — add TLS to sender/receiver, implement cert fingerprint verification
+
+### Session 2026-06-22 (Phase 3 — TLS Implementation)
+**Summary:** Implemented Phase 3 TLS + device verification. Updated `receiver.dart` to use `SecureServerSocket` with a `SecurityContext` loaded from `cert.pem` + `key.pem` passed as CLI args. Updated `sender.dart` to use `SecureSocket` with a `SecurityContext` trusting only the receiver's cert; `onBadCertificate` callback computes SHA-256 fingerprint of the presented cert and compares against the fingerprint derived from the cert file on disk — aborts with a clear error on mismatch. Added `pubspec.yaml` with `crypto: ^3.0.3` as the first project dependency. All file transfer logic after the connection is unchanged from Phase 2. Ran `dart pub get` (resolved crypto 3.0.7 + transitive deps collection, typed_data). Generated cert/key pair with openssl. Tested TLS transfer on loopback — confirmed working end-to-end.
+**Files Modified:** receiver.dart, sender.dart, pubspec.yaml (new), docs/PROJECT_LOG.md, docs/TASK_BOARD.md, docs/TODO.md
+**Decisions Made:** none (implementation follows Decision 002 and Decision 003 as specced)
+**Remaining Work:** Test mismatched cert rejection; test on two physical devices; begin Phase 4 (Flutter GUI)
+
+### Session 2026-06-20 (Doc Review)
+**Summary:** Reviewed the full repo (all docs + actual code) for consistency. Confirmed `broadcaster.dart`, `listener.dart`, `sender.dart`, `receiver.dart` all match their specs on code review. Found and fixed two gaps: ROADMAP.md status table was stale (still showed all phases "Not started"), and DECISIONS.md was missing Decisions 007-009 even though other docs already treated them as locked. Flagged that Phase 1's "confirmed on loopback" checkbox predates the Dart install, so it may not have been truly tested.
+**Files Modified:** docs/ROADMAP.md, docs/DECISIONS.md, docs/PROJECT_LOG.md
+**Decisions Made:** none (documentation consistency fixes only)
+**Remaining Work:** Re-verify Phase 1 actually runs, then build Phase 3 (TLS + device verification) per TODO.md# Task Board
+
+## In Progress
+_(none)_
+
+## Pending Review
+- [ ] Re-run `broadcaster.dart` + `listener.dart` for real to confirm Phase 1 actually works (checked off before Dart was installed — may not have been truly tested)
+- [ ] Test mismatched cert rejection: generate a second cert pair, pass wrong cert to sender — must abort with clear error, no data sent
+- [ ] Test TLS transfer on two physical devices on the same Wi-Fi (loopback done, physical not yet)
+
+## Blocked
+_(none)_
+
+## Done
+- [x] Pick GUI framework → Flutter (Decision 007)
+- [x] Pick programming language → Dart (Decision 008)
+- [x] Decide folder transfer method → file-by-file (Decision 009)
+- [x] Phase 1: broadcaster.dart — UDP broadcast every 2s with name + id
+- [x] Phase 1: listener.dart — receive + de-dupe device announcements
+- [x] Phase 2: sender.dart — TCP connect, send header + file bytes with progress
+- [x] Phase 2: receiver.dart — TCP listen, read header, write file to disk with progress
+- [x] Install Dart 3.12.2 on Ubuntu 24.04 (via apt dartlang repo)
+- [x] Phase 3: Generate self-signed cert + key pair with openssl
+- [x] Phase 3: receiver.dart — SecureServerSocket with cert.pem + key.pem from CLI args
+- [x] Phase 3: sender.dart — SecureSocket with SHA-256 cert fingerprint verification
+- [x] Phase 3: Add pubspec.yaml with crypto dependency, run dart pub get
+- [x] Phase 3: TLS transfer confirmed working on loopback
+
+## Next Up — Phase 4: Flutter GUI
+- [ ] Set up Flutter project scaffold
+- [ ] Device list screen (shows discovered devices from broadcaster/listener)
+- [ ] Send file flow (file picker → pick device → transfer)
+- [ ] Accept/reject popup on receiver side
+- [ ] Progress bar (per file + overall)# TODO — LinkDrop
+
+---
+
+## Phase 1: Core Discovery ✅
+
+- [x] `broadcaster.dart` sends a packet every 2 seconds with name + id
+- [x] `listener.dart` receives and prints found devices with the correct IP
+- [x] No duplicate spam for the same device in listener output
+- [x] Confirmed working on same machine (loopback) — **needs re-check, see Pending Review on TASK_BOARD.md**
+- [x] Ctrl+C cleanly stops both scripts, no crash
+
+---
+
+## Phase 2: Basic TCP File Transfer ✅
+
+- [x] `receiver.dart` starts, prints its IP + port, waits for a connection
+- [x] `sender.dart` connects, sends the header + file bytes, prints progress
+- [x] Received file matches the original exactly (byte-for-byte)
+- [x] Progress output appears in both terminals during transfer
+- [x] Tested on the same machine (loopback via 127.0.0.1)
+- [x] Ctrl+C on receiver closes cleanly, no crash
+
+---
+
+## Phase 3: Security (TLS + Device Verification)
+
+This is the exact spec for Phase 3. No GUI yet — upgrade the existing `sender.dart` and `receiver.dart` to use TLS-encrypted connections and verify the other device before any file data is sent. Bring the updated files back here for review against this list.
+
+### Goal
+Wrap the existing TCP connection in TLS so that:
+1. File data cannot be read or tampered with in transit
+2. The receiver can verify it is talking to a legitimate LinkDrop sender (not a rogue device)
+
+### What to build
+
+#### Step 1 — Generate self-signed certificates (one-time setup)
+Both devices need a certificate + private key pair. For Phase 3, self-signed certs are fine — no CA needed yet.
+
+```bash
+# Run once on each device (or generate one pair and copy it for testing)
+openssl req -x509 -newkey rsa:4096 -keyout key.pem -out cert.pem -days 365 -nodes -subj "/CN=linkdrop"
+```
+
+Files produced: `cert.pem` (public certificate), `key.pem` (private key)
+
+#### Step 2 — Update `receiver.dart`
+1. Load `cert.pem` and `key.pem` at startup
+2. Wrap the `ServerSocket` in a `SecureServerSocket` using those files
+3. All logic after the connection is accepted stays the same — TLS is transparent to the file transfer code
+4. Print `Secure receiver listening on port 7979 (TLS)` on startup
+
+#### Step 3 — Update `sender.dart`
+1. Load the receiver's `cert.pem` at startup (passed as a third CLI argument)
+2. Connect using `SecureSocket` instead of plain `Socket`, passing the cert for verification
+3. Use `onBadCertificate` callback to check the incoming cert fingerprint matches the expected one — reject if it doesn't
+4. Print `Connected securely to <ip>:7979 (TLS)` before sending
+5. All file sending logic after the connection stays the same
+
+#### Updated CLI usage
+```bash
+# Receiver (cert + key on the receiving device)
+dart receiver.dart ./received/ cert.pem key.pem
+
+# Sender (pass receiver's cert for verification)
+dart sender.dart 192.168.1.42 ./photo.jpg receiver_cert.pem
+```
+
+### Device verification approach (no login — Decision 003)
+Since there are no accounts, trust is established by certificate fingerprint:
+1. Receiver generates its cert once and keeps it
+2. Sender is given the receiver's cert (manually for now — Phase 4 will add a UI flow)
+3. Sender checks the fingerprint of the cert presented at connect time matches the one it was given
+4. If it doesn't match, sender aborts the connection immediately with a clear error message
+
+### Definition of done
+- [x] `receiver.dart` accepts only TLS connections — plain TCP connections are rejected
+- [x] `sender.dart` verifies the receiver's certificate fingerprint before sending any data
+- [ ] Mismatched cert causes sender to abort with a clear error, not silently send ← **pending test**
+- [x] File transfer still works correctly end-to-end after adding TLS (byte-for-byte match)
+- [ ] Tested on same machine first (loopback) ✅, then two physical devices ← **pending**
+- [x] `openssl` commands for cert generation are documented and confirmed working
+- [x] Ctrl+C still cleans up correctly on both sides
+
+### Not in scope yet
+- No certificate authority (CA) or certificate signing
+- No automatic cert exchange or pairing UI (Phase 4)
+- No accept/reject popup (Phase 4)
+- No folder support (Phase 5)
+- No pause/resume (Phase 5)
+
+---
+
+Once Phase 3 is written, bring both updated files back here. Review against this checklist and Decision 002 (TLS on TCP) and Decision 003 (no login — trust via cert fingerprint) before moving to Phase 4.import 'dart:convert';
+import 'dart:io';
+import 'dart:math';
+
+void main() async {
+  final port = 6868;
+  
+  // Generate a random id
+  final random = Random();
+  final id = List.generate(6, (_) => random.nextInt(16).toRadixString(16)).join();
+  final name = Platform.localHostname;
+
+  final socket = await RawDatagramSocket.bind(InternetAddress.anyIPv4, 0);
+  socket.broadcastEnabled = true;
+
+  print('Starting broadcaster...');
+
+  // Handle Ctrl+C cleanly
+  ProcessSignal.sigint.watch().listen((signal) {
+    print('\nStopping broadcaster...');
+    socket.close();
+    exit(0);
+  });
+
+  while (true) {
+    final message = jsonEncode({
+      'type': 'announce',
+      'name': name,
+      'id': id,
+    });
+
+    final data = utf8.encode(message);
+    socket.send(data, InternetAddress('255.255.255.255'), port);
+
+    print('Broadcasting as $name (id: $id)...');
+    await Future.delayed(Duration(seconds: 2));
+  }
+}
+import 'dart:convert';
+import 'dart:io';
+
+void main() async {
+  final port = 6868;
+  final socket = await RawDatagramSocket.bind(InternetAddress.anyIPv4, port, reuseAddress: true);
+  
+  print('Starting listener on port $port...');
+
+  // Map to keep track of seen devices: id -> last seen time
+  final Map<String, DateTime> seenDevices = {};
+
+  // Handle Ctrl+C cleanly
+  ProcessSignal.sigint.watch().listen((signal) {
+    print('\nStopping listener...');
+    socket.close();
+    exit(0);
+  });
+
+  socket.listen((RawSocketEvent event) {
+    if (event == RawSocketEvent.read) {
+      final datagram = socket.receive();
+      if (datagram != null) {
+        try {
+          final message = utf8.decode(datagram.data);
+          final json = jsonDecode(message);
+          
+          if (json is Map && json['type'] == 'announce') {
+            final id = json['id']?.toString();
+            final name = json['name']?.toString();
+            
+            if (id != null && name != null) {
+              final now = DateTime.now();
+              final lastSeen = seenDevices[id];
+              
+              // Print only if new device or hasn't been seen in the last ~10 seconds
+              if (lastSeen == null || now.difference(lastSeen).inSeconds >= 10) {
+                print('Found device: $name (id: $id) at ${datagram.address.address}');
+              }
+              
+              seenDevices[id] = now;
+            }
+          }
+        } catch (e) {
+          // Ignore non-JSON or malformed packets quietly
+        }
+      }
+    }
+  });
+}
+import 'dart:io';
+import 'dart:typed_data';
+import 'dart:convert';
+import 'dart:math';
+import 'package:crypto/crypto.dart';
+
+void main(List<String> args) async {
+  if (args.length < 3) {
+    print('Usage: dart sender.dart <receiver_ip> <file_path> <receiver_cert.pem>');
+    exit(1);
+  }
+
+  final receiverIp = args[0];
+  final filePath = args[1];
+  final receiverCertPath = args[2];
+
+  final file = File(filePath);
+  if (!await file.exists()) {
+    print('Error: File "$filePath" does not exist.');
+    exit(1);
+  }
+
+  final certFile = File(receiverCertPath);
+  if (!await certFile.exists()) {
+    print('Error: Receiver certificate not found: $receiverCertPath');
+    exit(1);
+  }
+
+  // Compute the expected SHA-256 fingerprint from the cert file on disk
+  final expectedFingerprint = await computeCertFingerprint(receiverCertPath);
+  print('Expected cert fingerprint: $expectedFingerprint');
+
+  final filename = file.uri.pathSegments.last;
+  final totalSize = await file.length();
+
+  // Build a SecurityContext that trusts ONLY the receiver's cert
+  final context = SecurityContext()
+    ..setTrustedCertificates(receiverCertPath);
+
+  print('Connecting to $receiverIp:7979 (TLS)...');
+
+  late SecureSocket socket;
+  try {
+    socket = await SecureSocket.connect(
+      receiverIp,
+      7979,
+      context: context,
+      onBadCertificate: (X509Certificate cert) {
+        // Called when the cert doesn't pass standard validation.
+        // We do our own fingerprint check here instead.
+        final presented = sha256
+            .convert(cert.der)
+            .bytes
+            .map((b) => b.toRadixString(16).padLeft(2, '0'))
+            .join(':');
+
+        if (presented == expectedFingerprint) {
+          print('Certificate fingerprint verified ✓');
+          return true; // allow the connection
+        } else {
+          print('ERROR: Certificate fingerprint mismatch!');
+          print('  Expected : $expectedFingerprint');
+          print('  Presented: $presented');
+          return false; // abort — this will throw a HandshakeException
+        }
+      },
+    );
+  } on HandshakeException catch (e) {
+    print('TLS handshake failed — aborting. No data was sent.');
+    print('Detail: $e');
+    exit(1);
+  } catch (e) {
+    print('Error connecting to $receiverIp: $e');
+    exit(1);
+  }
+
+  print('Connected securely to $receiverIp:7979 (TLS)');
+
+  final headerMap = {
+    'filename': filename,
+    'size': totalSize,
+  };
+  final headerJson = jsonEncode(headerMap);
+  final headerBytes = utf8.encode(headerJson);
+
+  final lengthByteData = ByteData(4)..setUint32(0, headerBytes.length, Endian.big);
+  socket.add(lengthByteData.buffer.asUint8List());
+  socket.add(headerBytes);
+
+  int bytesSent = 0;
+  final fileStream = file.openRead();
+
+  await for (final chunk in fileStream) {
+    socket.add(chunk);
+    bytesSent += chunk.length;
+    final sentMB = (bytesSent / (1024 * 1024)).toStringAsFixed(2);
+    final totalMB = (totalSize / (1024 * 1024)).toStringAsFixed(2);
+    stdout.write('\rSending $filename — $sentMB MB / $totalMB MB');
+  }
+
+  await socket.flush();
+  await socket.close();
+  print('\nTransfer complete: $filename');
+}
+
+/// Reads a PEM cert file and returns its SHA-256 fingerprint as a hex string
+/// in the format: aa:bb:cc:...
+Future<String> computeCertFingerprint(String certPath) async {
+  final pemBytes = await File(certPath).readAsBytes();
+
+  // Strip PEM headers and decode base64 to get raw DER bytes
+  final pemString = utf8.decode(pemBytes);
+  final base64Body = pemString
+      .replaceAll('-----BEGIN CERTIFICATE-----', '')
+      .replaceAll('-----END CERTIFICATE-----', '')
+      .replaceAll('\n', '')
+      .replaceAll('\r', '')
+      .trim();
+
+  final derBytes = base64Decode(base64Body);
+  final digest = sha256.convert(derBytes);
+  return digest.bytes
+      .map((b) => b.toRadixString(16).padLeft(2, '0'))
+      .join(':');
+}
+import 'dart:io';
+import 'dart:typed_data';
+import 'dart:convert';
+import 'dart:math';
+
+void main(List<String> args) async {
+  if (args.length < 3) {
+    print('Usage: dart receiver.dart <target_directory> <cert.pem> <key.pem>');
+    exit(1);
+  }
+
+  final targetDir = Directory(args[0]);
+  final certPath = args[1];
+  final keyPath = args[2];
+
+  if (!await targetDir.exists()) {
+    await targetDir.create(recursive: true);
+  }
+
+  // Verify cert and key files exist before binding
+  if (!await File(certPath).exists()) {
+    print('Error: Certificate file not found: $certPath');
+    exit(1);
+  }
+  if (!await File(keyPath).exists()) {
+    print('Error: Key file not found: $keyPath');
+    exit(1);
+  }
+
+  final context = SecurityContext()
+    ..useCertificateChain(certPath)
+    ..usePrivateKey(keyPath);
+
+  final serverSocket = await SecureServerSocket.bind(
+    InternetAddress.anyIPv4,
+    7979,
+    context,
+  );
+
+  print('Secure receiver listening on port 7979 (TLS)');
+  print('Certificate: $certPath');
+
+  ProcessSignal.sigint.watch().listen((ProcessSignal signal) async {
+    print('\nShutting down server...');
+    await serverSocket.close();
+    exit(0);
+  });
+
+  await for (SecureSocket socket in serverSocket) {
+    print('\nSecure connection from ${socket.remoteAddress.address}:${socket.remotePort}');
+    await handleConnection(socket, targetDir);
+  }
+}
+
+void printProgress(String filename, int received, int total) {
+  final receivedMB = (received / (1024 * 1024)).toStringAsFixed(2);
+  final totalMB = (total / (1024 * 1024)).toStringAsFixed(2);
+  stdout.write('\rReceiving $filename — $receivedMB MB / $totalMB MB');
+}
+
+Future<void> handleConnection(SecureSocket socket, Directory targetDir) async {
+  try {
+    final bytesBuilder = BytesBuilder();
+    int? headerLength;
+    Map<String, dynamic>? header;
+    IOSink? fileSink;
+    String? filename;
+    int? totalSize;
+    int fileBytesReceived = 0;
+    bool headerParsed = false;
+
+    await for (final data in socket) {
+      if (!headerParsed) {
+        bytesBuilder.add(data);
+
+        if (headerLength == null && bytesBuilder.length >= 4) {
+          final buffer = bytesBuilder.takeBytes();
+          final byteData = ByteData.sublistView(Uint8List.fromList(buffer.sublist(0, 4)));
+          headerLength = byteData.getUint32(0, Endian.big);
+          bytesBuilder.add(buffer.sublist(4));
+        }
+
+        if (headerLength != null && bytesBuilder.length >= headerLength!) {
+          final buffer = bytesBuilder.takeBytes();
+          final jsonBytes = buffer.sublist(0, headerLength!);
+          final jsonStr = utf8.decode(jsonBytes);
+          header = jsonDecode(jsonStr);
+          filename = header!['filename'];
+          totalSize = header['size'];
+
+          final file = File('${targetDir.path}/$filename');
+          fileSink = file.openWrite();
+          headerParsed = true;
+
+          final remaining = buffer.sublist(headerLength!);
+          if (remaining.isNotEmpty) {
+            fileSink.add(remaining);
+            fileBytesReceived += remaining.length;
+            printProgress(filename!, fileBytesReceived, totalSize!);
+          }
+        }
+      } else {
+        fileSink!.add(data);
+        fileBytesReceived += data.length;
+        printProgress(filename!, fileBytesReceived, totalSize!);
+      }
+    }
+
+    if (fileSink != null) {
+      await fileSink.flush();
+      await fileSink.close();
+      print('\nTransfer complete: $filename');
+    }
+  } catch (e) {
+    print('\nError during transfer: $e');
+  } finally {
+    socket.destroy();
+  }
+}
+name: linkdrop
+description: AirDrop-style local Wi-Fi file transfer — CLI phases
+version: 0.1.0
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  crypto: ^3.0.3

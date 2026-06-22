@@ -55,6 +55,7 @@ Topic: Programming language for discovery + transfer engine
 Decision: Use Dart
 Reason: Flutter already requires Dart for the app. Dart's built-in `dart:io` library supports UDP, TCP, and TLS sockets directly, so the same code used for Phase 1-2 (console scripts) drops into the Flutter app later with no rewrite
 Consequences: All core networking code is written once, in one language, for every platform
+Update 2026-06-22: CLI logic restructured into lib/engine/ classes (callback-based) so Flutter can call it directly with no rewrite, per the original plan.
 
 ## Decision 009
 Date: 2026-06-20

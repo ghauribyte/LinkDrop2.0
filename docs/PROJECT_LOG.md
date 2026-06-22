@@ -8,6 +8,7 @@
 - GUI framework locked: Flutter (Decision 007)
 - Engine language locked: Dart (Decision 008)
 - File transfer method locked: file-by-file, multi-file supported (Decision 009)
+- Active milestone: Flutter GUI scaffold setup (Phase 4) — engine code restructured and ready
 
 ## Completed Work
 - Created `broadcaster.dart` and `listener.dart` for UDP discovery (Phase 1)
@@ -89,3 +90,9 @@ See TASK_BOARD.md.
 **Files Modified:** docs/ROADMAP.md, docs/DECISIONS.md, docs/PROJECT_LOG.md
 **Decisions Made:** none (documentation consistency fixes only)
 **Remaining Work:** Re-verify Phase 1 actually runs, then build Phase 3 (TLS + device verification) per TODO.md
+
+### Session 2026-06-22 (Engine Restructure)
+**Summary:** Restructured broadcaster.dart, listener.dart, sender.dart, receiver.dart into lib/engine/ classes (DiscoveryBroadcaster, DiscoveryListener, FileSender, FileReceiver) using callbacks instead of print/exit, so the same logic can be called from Flutter later (Decision 008). Added lib/models/device.dart and lib/models/transfer_progress.dart as shared data types. Old CLI files kept at repo root as thin wrappers — same commands and behavior as before. Ran dart pub get, tested broadcaster+listener pair and receiver+sender TLS transfer — confirmed still working end-to-end.
+**Files Modified:** broadcaster.dart, listener.dart, sender.dart, receiver.dart, lib/engine/discovery_broadcaster.dart (new), lib/engine/discovery_listener.dart (new), lib/engine/file_sender.dart (new), lib/engine/file_receiver.dart (new), lib/models/device.dart (new), lib/models/transfer_progress.dart (new), docs/TASK_BOARD.md, docs/PROJECT_LOG.md
+**Decisions Made:** none (implementation note added under Decision 008, not a new decision)
+**Remaining Work:** Begin Phase 4 — Flutter project scaffold
