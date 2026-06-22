@@ -73,5 +73,11 @@ Reason: Two transfers writing to disk at once competes for bandwidth and disk I/
 Consequences: Receiver throughput is capped at one transfer at a time even on fast networks/hardware. A future version could allow limited parallelism if this becomes a real bottleneck, but simple-and-sequential is the right default for now.
 ---
 
+## Decision 011
+Date: 2026-06-22
+Topic: Automatic certificate exchange
+Decision: Add a small plain-TCP "cert server" (port 7980) alongside the existing secure file-receiving server. Anyone who connects to it receives the receiver's cert.pem contents immediately, no request format needed — connecting IS the request. The sender then computes the fingerprint from this fetched cert and proceeds with the existing TLS fingerprint-check flow (Decision 002/003) unchanged.
+Reason: Removes the manual "copy cert.pem to the sender's machine by hand" step, which was blocking the GUI send flow. A public certificate is not sensitive information — handing it out over plain TCP is exactly as safe as putting it on a public webpage. The actual trust decision still happens later, via fingerprint verification at TLS connect time.
+Consequences: One more open port per device (7980). Anyone on the network can ask any LinkDrop device for its cert — this is intentional and harmless, same as how AirDrop/Bluetooth pairing works without secrecy of the public key itself.
 ## Pending Decisions (need to be made before coding starts)
 _(none — all core decisions made, ready to continue through the phases)_

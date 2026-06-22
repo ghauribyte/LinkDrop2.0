@@ -9,6 +9,8 @@
 - Engine language locked: Dart (Decision 008)
 - File transfer method locked: file-by-file, multi-file supported (Decision 009)
 - Active milestone: Flutter GUI scaffold setup (Phase 4) — engine code restructured and ready
+- Active milestone: Flutter device list screen (Phase 4)
+- Active milestone: Send file flow (Phase 4)
 
 ## Completed Work
 - Created `broadcaster.dart` and `listener.dart` for UDP discovery (Phase 1)
@@ -102,3 +104,20 @@ See TASK_BOARD.md.
 **Files Modified:** lib/engine/file_receiver.dart, receiver.dart, docs/DECISIONS.md, docs/TASK_BOARD.md, docs/PROJECT_LOG.md
 **Decisions Made:** 010 (sequential transfer queueing on receiver)
 **Remaining Work:** Begin Phase 4 — Flutter project scaffold
+### Session 2026-06-22 (Flutter Scaffold)
+**Summary:** Ran flutter create in the existing repo root. pubspec.yaml had to be merged manually (flutter create skipped it since it already existed) — added flutter SDK dependency, cupertino_icons, flutter_lints, and the flutter: uses-material-design section, while keeping the existing crypto dependency intact. Fixed two dot-shorthand syntax errors in the generated lib/main.dart (colorScheme: .fromSeed and mainAxisAlignment: .center don't compile on this Dart/Flutter version) by spelling out ColorScheme.fromSeed and MainAxisAlignment.center. Ran flutter run targeting Chrome — confirmed the default counter demo app compiles and launches correctly.
+**Files Modified:** pubspec.yaml, lib/main.dart, docs/TASK_BOARD.md, docs/PROJECT_LOG.md
+**Decisions Made:** none (scaffold setup only, no architecture changes)
+**Remaining Work:** Build device list screen, wired to DiscoveryBroadcaster/DiscoveryListener
+
+### Session 2026-06-22 (Device List Screen)
+**Summary:** Built lib/screens/device_list_screen.dart, wired directly to the existing DiscoveryBroadcaster and DiscoveryListener engine classes — no new networking logic. Screen starts broadcasting + listening on load, shows discovered devices live in a ListView, disposes both cleanly on screen exit. Replaced the placeholder counter app in lib/main.dart to open this screen on launch. Added a self-filter (skip any discovered device whose id matches the broadcaster's own deviceId) after first test showed the app finding itself, since broadcaster and listener run in the same process. Tested cross-process discovery on Linux desktop: Flutter app's broadcast was picked up correctly by the standalone CLI dart listener.dart, and the CLI's dart broadcaster.dart showed up correctly inside the Flutter app's device list. Confirmed working both directions.
+**Files Modified:** lib/main.dart, lib/screens/device_list_screen.dart (new)
+**Decisions Made:** none (UI wiring only, no architecture change)
+**Remaining Work:** Send file flow — file picker, pick device from this screen, start transfer via FileSender
+
+### Session 2026-06-22 (Automatic Cert Exchange)
+**Summary:** Built lib/engine/cert_exchange.dart with two pieces: CertServer (tiny plain-TCP server that serves cert.pem contents to anyone who connects) and fetchCert() (client function that connects to a given IP/port and downloads the cert, with a PEM sanity check). Wired CertServer into FileReceiver so it starts/stops alongside the existing TLS file server, using the same certPath. This closes the gap flagged in TODO.md ("no automatic cert exchange") that was blocking the GUI send flow. Built fetch_cert_test.dart as a standalone CLI test. Tested against a live receiver — confirmed the full valid cert.pem was fetched correctly over the network with no manual file copying.
+**Files Modified:** lib/engine/cert_exchange.dart (new), lib/engine/file_receiver.dart, fetch_cert_test.dart (new)
+**Decisions Made:** 011 (automatic plain-TCP cert exchange)
+**Remaining Work:** Build the actual send file flow in Flutter — file picker → pick device → fetchCert(device.ip) → FileSender

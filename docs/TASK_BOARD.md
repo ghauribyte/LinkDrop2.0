@@ -29,10 +29,12 @@ _(none)_
 - [x] Confirmed restructured code still works: pub get, broadcaster+listener pair, receiver+sender TLS transfer
 - [x] Add transfer queueing to FileReceiver (FIFO, one transfer at a time, 5 min timeout)
 - [x] Tested two simultaneous senders against one receiver — second one queues, transfers after first finishes, both files intact
-
+- [x] Set up Flutter project scaffold
+- [x] Device list screen (shows discovered devices from broadcaster/listener)
+- [x] Build CertServer + fetchCert (lib/engine/cert_exchange.dart) — automatic cert exchange over plain TCP
+- [x] Wire CertServer into FileReceiver (starts/stops alongside main TLS server)
+- [x] Tested fetch_cert_test.dart against live receiver — confirmed valid PEM returned over the network
 ## Next Up — Phase 4: Flutter GUI
-- [ ] Set up Flutter project scaffold
-- [ ] Device list screen (shows discovered devices from broadcaster/listener)
 - [ ] Send file flow (file picker → pick device → transfer)
 - [ ] Accept/reject popup on receiver side
 - [ ] Progress bar (per file + overall)

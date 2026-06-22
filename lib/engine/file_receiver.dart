@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:typed_data';
 import 'dart:convert';
 
+import 'cert_exchange.dart';
 import '../models/transfer_progress.dart';
 
 /// Listens for incoming TLS-secured TCP connections and receives a file,
@@ -17,6 +18,10 @@ class FileReceiver {
   final String certPath;
   final String keyPath;
   final int port;
+
+  /// Port for the small plain-TCP cert exchange server, started
+  /// alongside the secure file-receiving server. See CertServer.
+  final int certServerPort;
 
   final void Function(String message)? onStatus;
   final void Function(String ip, int port)? onConnection;
@@ -35,6 +40,7 @@ class FileReceiver {
   final Duration queueTimeout;
 
   SecureServerSocket? _serverSocket;
+  CertServer? _certServer;
   bool _running = false;
 
   /// Simple one-at-a-time lock for the actual file transfer step.
@@ -50,6 +56,7 @@ class FileReceiver {
     required this.certPath,
     required this.keyPath,
     this.port = 7979,
+    this.certServerPort = 7980,
     this.queueTimeout = const Duration(minutes: 5),
     this.onStatus,
     this.onConnection,
@@ -93,6 +100,17 @@ class FileReceiver {
 
     _running = true;
     onStatus?.call('Secure receiver listening on port $port (TLS)');
+
+    // Start the small cert exchange server too, so senders can fetch
+    // our public cert automatically instead of needing it copied by
+    // hand. Same lifecycle as the main server — both start together.
+    _certServer = CertServer(
+      certPath: certPath,
+      port: certServerPort,
+      onStatus: onStatus,
+      onError: onError,
+    );
+    await _certServer!.start();
 
     _acceptLoop();
     return true;
@@ -217,6 +235,8 @@ class FileReceiver {
     _running = false;
     await _serverSocket?.close();
     _serverSocket = null;
+    await _certServer?.stop();
+    _certServer = null;
     onStatus?.call('Shutting down server...');
   }
 }
