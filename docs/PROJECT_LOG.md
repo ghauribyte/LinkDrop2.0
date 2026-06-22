@@ -96,3 +96,9 @@ See TASK_BOARD.md.
 **Files Modified:** broadcaster.dart, listener.dart, sender.dart, receiver.dart, lib/engine/discovery_broadcaster.dart (new), lib/engine/discovery_listener.dart (new), lib/engine/file_sender.dart (new), lib/engine/file_receiver.dart (new), lib/models/device.dart (new), lib/models/transfer_progress.dart (new), docs/TASK_BOARD.md, docs/PROJECT_LOG.md
 **Decisions Made:** none (implementation note added under Decision 008, not a new decision)
 **Remaining Work:** Begin Phase 4 — Flutter project scaffold
+
+### Session 2026-06-22 (Transfer Queueing)
+**Summary:** Added FIFO queueing to FileReceiver so multiple senders connecting at once are handled one transfer at a time instead of running concurrently. TCP connections are still accepted immediately; only the file-write step waits its turn behind a simple chained-Future lock. Added onQueued callback and a 5-minute queue timeout. Updated receiver.dart CLI wrapper to print queue status. Tested with two senders hitting one receiver simultaneously — confirmed correct ordering and both files arrived intact.
+**Files Modified:** lib/engine/file_receiver.dart, receiver.dart, docs/DECISIONS.md, docs/TASK_BOARD.md, docs/PROJECT_LOG.md
+**Decisions Made:** 010 (sequential transfer queueing on receiver)
+**Remaining Work:** Begin Phase 4 — Flutter project scaffold

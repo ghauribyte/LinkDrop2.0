@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 import 'dart:convert';
@@ -19,20 +20,40 @@ class FileReceiver {
 
   final void Function(String message)? onStatus;
   final void Function(String ip, int port)? onConnection;
+
+  /// Called when an incoming connection has to wait because another
+  /// transfer is already in progress. [position] is how many transfers
+  /// are ahead of it in the queue (1 = next up after the current one).
+  final void Function(String ip, int position)? onQueued;
+
   final void Function(TransferProgress progress)? onProgress;
   final void Function(String filename)? onComplete;
   final void Function(String message)? onError;
 
+  /// Max time a connection will wait in queue before being dropped.
+  /// Prevents one stuck/slow sender from blocking everyone forever.
+  final Duration queueTimeout;
+
   SecureServerSocket? _serverSocket;
   bool _running = false;
+
+  /// Simple one-at-a-time lock for the actual file transfer step.
+  /// The accept loop still accepts every incoming TCP connection right
+  /// away (so senders never get connection-refused) — this lock only
+  /// gates when a connection is allowed to start writing its file,
+  /// so two transfers never interleave on disk at once.
+  Future<void> _transferLock = Future.value();
+  int _queueLength = 0;
 
   FileReceiver({
     required this.targetDir,
     required this.certPath,
     required this.keyPath,
     this.port = 7979,
+    this.queueTimeout = const Duration(minutes: 5),
     this.onStatus,
     this.onConnection,
+    this.onQueued,
     this.onProgress,
     this.onComplete,
     this.onError,
@@ -80,7 +101,46 @@ class FileReceiver {
   void _acceptLoop() async {
     await for (final socket in _serverSocket!) {
       onConnection?.call(socket.remoteAddress.address, socket.remotePort);
+      // Don't await here — accepting new TCP connections must never
+      // block on a transfer that's already in progress. Queueing is
+      // handled inside _queueAndHandle via _transferLock.
+      _queueAndHandle(socket);
+    }
+  }
+
+  /// Queues this connection behind any transfer already in progress,
+  /// then runs it once it's this connection's turn. Connections are
+  /// served strictly in the order they arrived (FIFO).
+  Future<void> _queueAndHandle(SecureSocket socket) async {
+    final myTurn = _transferLock;
+    final position = _queueLength;
+    _queueLength++;
+
+    // Chain the next lock onto this one — the next caller waits for
+    // this transfer (and everyone ahead of it) to finish first.
+    final completer = Completer<void>();
+    _transferLock = completer.future;
+
+    if (position > 0) {
+      onQueued?.call(socket.remoteAddress.address, position);
+    }
+
+    try {
+      await myTurn.timeout(queueTimeout);
+    } catch (_) {
+      onError?.call(
+          'Transfer from ${socket.remoteAddress.address} timed out waiting in queue.');
+      socket.destroy();
+      _queueLength--;
+      completer.complete();
+      return;
+    }
+
+    try {
       await _handleConnection(socket);
+    } finally {
+      _queueLength--;
+      completer.complete();
     }
   }
 

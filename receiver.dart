@@ -14,6 +14,8 @@ void main(List<String> args) async {
     keyPath: args[2],
     onStatus: (msg) => print(msg),
     onConnection: (ip, port) => print('\nSecure connection from $ip:$port'),
+    onQueued: (ip, position) =>
+        print('Connection from $ip is queued ($position ahead) — waiting for current transfer to finish...'),
     onProgress: (TransferProgress p) {
       stdout.write('\rReceiving ${p.filename} — ${p.doneMB} MB / ${p.totalMB} MB');
     },

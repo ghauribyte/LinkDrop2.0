@@ -27,6 +27,8 @@ _(none)_
 - [x] Phase 3: TLS transfer confirmed working on loopback
 - [x] Restructure broadcaster/listener/sender/receiver into lib/engine/ classes (callback-based, no print/exit)
 - [x] Confirmed restructured code still works: pub get, broadcaster+listener pair, receiver+sender TLS transfer
+- [x] Add transfer queueing to FileReceiver (FIFO, one transfer at a time, 5 min timeout)
+- [x] Tested two simultaneous senders against one receiver — second one queues, transfers after first finishes, both files intact
 
 ## Next Up — Phase 4: Flutter GUI
 - [ ] Set up Flutter project scaffold

@@ -64,6 +64,13 @@ Decision: Send files one by one (file-by-file), not as a zipped folder. User can
 Reason: No wait time to zip first, no extra disk space needed, each file gets its own progress, a failed file doesn't block the rest, and pause/resume works per file instead of breaking a whole zip
 Consequences: Need a small file list/manifest sent first (names, sizes, count) so the receiver knows what's coming and can show progress per file and overall
 
+
+## Decision 010
+Date: 2026-06-22
+Topic: Concurrent transfer handling on the receiver
+Decision: When multiple senders connect to one receiver at the same time, transfers are queued and run one at a time, in the order connections arrived (FIFO). TCP connections are still accepted immediately so senders never get connection-refused — only the actual file write waits its turn. A 5-minute queue timeout drops a connection if it waits too long.
+Reason: Two transfers writing to disk at once competes for bandwidth and disk I/O, and a future GUI needs a clean "1 of 2" status to show the user — that's only possible if transfers are strictly sequential. Matches the same sequential philosophy as Decision 009 (file-by-file, no zipping).
+Consequences: Receiver throughput is capped at one transfer at a time even on fast networks/hardware. A future version could allow limited parallelism if this becomes a real bottleneck, but simple-and-sequential is the right default for now.
 ---
 
 ## Pending Decisions (need to be made before coding starts)
