@@ -12,10 +12,9 @@ import 'device_list_screen.dart';
 enum _SendState { idle, pickingDevice, fetchingCert, sending, done, failed }
 
 /// Orchestrates the full send flow:
-/// 1. Pick a file from disk
+/// 1. Pick one or more files from disk (Decision 013 — multi-file)
 /// 2. Pick a device from DeviceListScreen
-/// 3. Fetch that device's cert automatically (Decision 011 — no more
-///    manual cert copying)
+/// 3. Fetch that device's cert automatically (Decision 011)
 /// 4. Hand off to the existing, already-tested FileSender
 ///
 /// This screen does not duplicate any transfer logic — it only wires
@@ -29,21 +28,28 @@ class SendScreen extends StatefulWidget {
 
 class _SendScreenState extends State<SendScreen> {
   _SendState _state = _SendState.idle;
-  String? _filePath;
-  String? _fileName;
+  List<String> _filePaths = [];
   Device? _device;
   String? _errorMessage;
   TransferProgress? _progress;
 
-  Future<void> _pickFileAndSend() async {
-    final result = await FilePicker.platform.pickFiles();
-    if (result == null || result.files.single.path == null) {
+  Future<void> _pickFilesAndSend() async {
+    final result = await FilePicker.platform.pickFiles(allowMultiple: true);
+    if (result == null || result.files.isEmpty) {
       return; // user cancelled — stay on idle, no error
     }
 
+    final paths = result.files
+        .map((f) => f.path)
+        .whereType<String>() // drop any null paths defensively
+        .toList();
+
+    if (paths.isEmpty) {
+      return;
+    }
+
     setState(() {
-      _filePath = result.files.single.path;
-      _fileName = result.files.single.name;
+      _filePaths = paths;
       _errorMessage = null;
       _state = _SendState.pickingDevice;
     });
@@ -92,7 +98,7 @@ class _SendScreenState extends State<SendScreen> {
 
     final sender = FileSender(
       receiverIp: device.ipAddress,
-      filePath: _filePath!,
+      filePaths: _filePaths,
       receiverCertPath: tempCertFile.path,
       onProgress: (p) {
         if (!mounted) return;
@@ -120,18 +126,25 @@ class _SendScreenState extends State<SendScreen> {
   void _reset() {
     setState(() {
       _state = _SendState.idle;
-      _filePath = null;
-      _fileName = null;
+      _filePaths = [];
       _device = null;
       _errorMessage = null;
       _progress = null;
     });
   }
 
+  String get _fileSummary {
+    if (_filePaths.isEmpty) return '';
+    if (_filePaths.length == 1) {
+      return _filePaths.first.split(Platform.pathSeparator).last;
+    }
+    return '${_filePaths.length} files';
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Send a File')),
+      appBar: AppBar(title: const Text('Send Files')),
       body: Center(
         child: Padding(
           padding: const EdgeInsets.all(24),
@@ -150,12 +163,12 @@ class _SendScreenState extends State<SendScreen> {
             Icon(Icons.send,
                 size: 48, color: Theme.of(context).colorScheme.primary),
             const SizedBox(height: 16),
-            const Text('Pick a file to send to a nearby device.'),
+            const Text('Pick one or more files to send to a nearby device.'),
             const SizedBox(height: 24),
             FilledButton.icon(
-              onPressed: _pickFileAndSend,
+              onPressed: _pickFilesAndSend,
               icon: const Icon(Icons.attach_file),
-              label: const Text('Choose File'),
+              label: const Text('Choose Files'),
             ),
           ],
         );
@@ -178,7 +191,13 @@ class _SendScreenState extends State<SendScreen> {
         return Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text('Sending $_fileName to ${_device?.name}'),
+            Text('Sending $_fileSummary to ${_device?.name}'),
+            const SizedBox(height: 8),
+            if (p != null && p.isBatch)
+              Text(
+                'File ${p.batchLabel}: ${p.filename}',
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
             const SizedBox(height: 16),
             if (p != null) ...[
               LinearProgressIndicator(value: p.fraction),
@@ -196,11 +215,11 @@ class _SendScreenState extends State<SendScreen> {
             Icon(Icons.check_circle,
                 size: 48, color: Theme.of(context).colorScheme.primary),
             const SizedBox(height: 16),
-            Text('$_fileName sent to ${_device?.name}'),
+            Text('$_fileSummary sent to ${_device?.name}'),
             const SizedBox(height: 24),
             FilledButton(
               onPressed: _reset,
-              child: const Text('Send Another File'),
+              child: const Text('Send More Files'),
             ),
           ],
         );

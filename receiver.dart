@@ -17,9 +17,11 @@ void main(List<String> args) async {
     onQueued: (ip, position) =>
         print('Connection from $ip is queued ($position ahead) — waiting for current transfer to finish...'),
     onProgress: (TransferProgress p) {
-      stdout.write('\rReceiving ${p.filename} — ${p.doneMB} MB / ${p.totalMB} MB');
+      final prefix = p.isBatch ? '[${p.batchLabel}] ' : '';
+      stdout.write('\r${prefix}Receiving ${p.filename} — ${p.doneMB} MB / ${p.totalMB} MB');
     },
-    onComplete: (filename) => print('\nTransfer complete: $filename'),
+    onComplete: (filename) => print('\nReceived: $filename'),
+    onBatchComplete: (count) => print('\nTransfer complete ($count file(s)).'),
     onError: (msg) => print('\n$msg'),
   );
 

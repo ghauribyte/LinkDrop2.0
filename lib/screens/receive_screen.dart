@@ -5,6 +5,7 @@ import 'package:path_provider/path_provider.dart';
 
 import '../engine/discovery_broadcaster.dart';
 import '../engine/file_receiver.dart';
+import '../models/manifest_entry.dart';
 import '../models/transfer_progress.dart';
 
 /// Runs the receiving side of LinkDrop as a real device:
@@ -75,8 +76,8 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
         if (!mounted) return;
         setState(() => _statusMessage = msg);
       },
-      onIncomingRequest: (filename, size, senderIp) =>
-          _showAcceptRejectDialog(filename, size, senderIp),
+      onIncomingRequest: (files, senderIp) =>
+          _showAcceptRejectDialog(files, senderIp),
       onProgress: (p) {
         if (!mounted) return;
         setState(() {
@@ -86,8 +87,14 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
       },
       onComplete: (filename) {
         if (!mounted) return;
+        setState(() => _statusMessage = 'Received: $filename');
+      },
+      onBatchComplete: (count) {
+        if (!mounted) return;
         setState(() {
-          _statusMessage = 'Received: $filename';
+          _statusMessage = count == 1
+              ? 'Transfer complete.'
+              : 'Transfer complete ($count files).';
           _progress = null;
           _currentFilename = null;
         });
@@ -102,24 +109,32 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
     await _receiver!.start();
   }
 
-  /// Shows the accept/reject popup. Returned Future resolves when the
-  /// user taps a button — FileReceiver awaits this before writing any
-  /// bytes to disk (see onIncomingRequest in file_receiver.dart).
+  /// Shows the accept/reject popup for the whole incoming batch. The
+  /// returned Future resolves when the user taps a button — FileReceiver
+  /// awaits this before writing any bytes to disk (see onIncomingRequest
+  /// in file_receiver.dart). One decision covers every file in the batch.
   Future<bool> _showAcceptRejectDialog(
-    String filename,
-    int size,
+    List<ManifestEntry> files,
     String senderIp,
   ) async {
     if (!mounted) return false;
 
-    final sizeMB = (size / (1024 * 1024)).toStringAsFixed(2);
+    final totalBytes = files.fold<int>(0, (sum, f) => sum + f.size);
+    final totalMB = (totalBytes / (1024 * 1024)).toStringAsFixed(2);
+
+    final title = files.length == 1 ? 'Incoming File' : 'Incoming Files';
+    final fileList = files.length <= 5
+        ? files.map((f) => f.name).join('\n')
+        : '${files.take(5).map((f) => f.name).join('\n')}\n...and ${files.length - 5} more';
 
     final result = await showDialog<bool>(
       context: context,
       barrierDismissible: false,
       builder: (context) => AlertDialog(
-        title: const Text('Incoming File'),
-        content: Text('$filename ($sizeMB MB)\nfrom $senderIp'),
+        title: Text(title),
+        content: Text(
+          '$fileList\n\n${files.length} file(s), $totalMB MB total\nfrom $senderIp',
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.of(context).pop(false),
@@ -175,6 +190,13 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
         mainAxisSize: MainAxisSize.min,
         children: [
           Text('Receiving $_currentFilename'),
+          if (p.isBatch) ...[
+            const SizedBox(height: 4),
+            Text(
+              'File ${p.batchLabel}',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
+          ],
           const SizedBox(height: 16),
           LinearProgressIndicator(value: p.fraction),
           const SizedBox(height: 8),

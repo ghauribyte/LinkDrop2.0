@@ -5,14 +5,104 @@ import 'dart:convert';
 
 import 'cert_exchange.dart';
 import '../models/transfer_progress.dart';
+import '../models/manifest_entry.dart';
 
-/// Listens for incoming TLS-secured TCP connections and receives a file,
-/// using the same header-then-bytes wire format as FileSender.
+/// Reads exact byte counts from a socket stream, buffering whatever
+/// arrives early. Used for manifest, per-file headers, and file bytes
+/// — all three are "read exactly N bytes" operations, just with
+/// different N and different destinations (memory vs disk).
 ///
-/// Same protocol as the original receiver.dart — only the input/output
-/// style changed (callbacks instead of print/exit) so this can be
-/// driven by a CLI script or a Flutter UI (e.g. accept/reject popup
-/// in Phase 4).
+/// This replaces the old hand-rolled single-pass parser, which only
+/// knew how to read one header + one file body. A multi-file manifest
+/// needs to repeat "read a length-prefixed chunk" several times in a
+/// row, so this small buffered reader is shared across all of them.
+class _SocketReader {
+  final Stream<List<int>> _stream;
+  StreamIterator<List<int>>? _iterator;
+  List<int> _buffer = [];
+
+  _SocketReader(this._stream) {
+    _iterator = StreamIterator(_stream);
+  }
+
+  /// Reads exactly [n] bytes, buffering across multiple socket chunks
+  /// as needed. Returns null if the stream ends before [n] bytes
+  /// arrive (sender disconnected early).
+  Future<List<int>?> readExact(int n) async {
+    while (_buffer.length < n) {
+      final hasMore = await _iterator!.moveNext();
+      if (!hasMore) return null;
+      _buffer.addAll(_iterator!.current);
+    }
+    final result = _buffer.sublist(0, n);
+    _buffer = _buffer.sublist(n);
+    return result;
+  }
+
+  /// Reads a [4-byte big-endian length][JSON payload] pair, as sent by
+  /// FileSender._sendLengthPrefixedJson. Returns null on early EOF.
+  Future<Map<String, dynamic>?> readLengthPrefixedJson() async {
+    final lengthBytes = await readExact(4);
+    if (lengthBytes == null) return null;
+    final length =
+        ByteData.sublistView(Uint8List.fromList(lengthBytes)).getUint32(0, Endian.big);
+    final jsonBytes = await readExact(length);
+    if (jsonBytes == null) return null;
+    return jsonDecode(utf8.decode(jsonBytes)) as Map<String, dynamic>;
+  }
+
+  /// Streams exactly [n] bytes to [sink], calling [onChunk] after each
+  /// write so the caller can report progress. Returns false on early
+  /// EOF (fewer than [n] bytes arrived).
+  Future<bool> pipeExact(
+    int n,
+    IOSink sink,
+    void Function(int writtenSoFar) onChunk,
+  ) async {
+    var remaining = n;
+    var written = 0;
+
+    // Flush whatever's already buffered first.
+    if (_buffer.isNotEmpty) {
+      final take = _buffer.length < remaining ? _buffer.length : remaining;
+      final chunk = _buffer.sublist(0, take);
+      _buffer = _buffer.sublist(take);
+      sink.add(chunk);
+      written += chunk.length;
+      remaining -= chunk.length;
+      onChunk(written);
+    }
+
+    while (remaining > 0) {
+      final hasMore = await _iterator!.moveNext();
+      if (!hasMore) return false;
+      final data = _iterator!.current;
+      final take = data.length < remaining ? data.length : remaining;
+      sink.add(data.sublist(0, take));
+      written += take;
+      remaining -= take;
+      onChunk(written);
+
+      // Any leftover bytes beyond this file's size belong to the next
+      // file's header — keep them buffered for the next readExact call.
+      if (take < data.length) {
+        _buffer = data.sublist(take);
+      }
+    }
+    return true;
+  }
+}
+
+/// Listens for incoming TLS-secured TCP connections and receives one
+/// or more files per connection, using a manifest-first wire protocol
+/// (Decision 013 — multi-file support).
+///
+/// Wire protocol:
+/// 1. [4-byte length][manifest JSON: {type, count, files: [{name, size}]}]
+/// 2. For each file, in order: [4-byte length][header JSON][file bytes]
+///
+/// A single-file send is just a manifest with one entry, so this
+/// also handles the original Phase 2/3 use case with no special case.
 class FileReceiver {
   final Directory targetDir;
   final String certPath;
@@ -32,27 +122,31 @@ class FileReceiver {
   final void Function(String ip, int position)? onQueued;
 
   final void Function(TransferProgress progress)? onProgress;
+
+  /// Called once per file as it finishes (not once per batch).
   final void Function(String filename)? onComplete;
+
+  /// Called once the whole batch (all files in the manifest) is done.
+  final void Function(int fileCount)? onBatchComplete;
+
   final void Function(String message)? onError;
 
-  /// Called once the incoming file's name and size are known, before
-  /// any bytes are written to disk. Return true to accept and start
-  /// writing the file, false to reject — in which case nothing is
-  /// written and the connection is closed.
+  /// Called once the incoming manifest is known (file count + total
+  /// size), before any bytes are written to disk. Return true to
+  /// accept and start receiving every file in the batch, false to
+  /// reject the whole batch — in which case nothing is written.
   ///
-  /// Optional — if not provided, behaves exactly as before (auto-accept,
-  /// no behavior change), which keeps the CLI receiver.dart working
-  /// unchanged. The GUI passes this to show an accept/reject popup.
-  final Future<bool> Function(String filename, int size, String senderIp)?
-      onIncomingRequest;
+  /// Optional — if not provided, behaves exactly as before (auto-accept).
+  final Future<bool> Function(
+    List<ManifestEntry> files,
+    String senderIp,
+  )? onIncomingRequest;
 
   /// How long to wait for an accept/reject decision before giving up
-  /// and rejecting automatically. Prevents a sender being stuck forever
-  /// if nobody looks at the popup.
+  /// and rejecting automatically.
   final Duration requestTimeout;
 
   /// Max time a connection will wait in queue before being dropped.
-  /// Prevents one stuck/slow sender from blocking everyone forever.
   final Duration queueTimeout;
 
   SecureServerSocket? _serverSocket;
@@ -61,9 +155,8 @@ class FileReceiver {
 
   /// Simple one-at-a-time lock for the actual file transfer step.
   /// The accept loop still accepts every incoming TCP connection right
-  /// away (so senders never get connection-refused) — this lock only
-  /// gates when a connection is allowed to start writing its file,
-  /// so two transfers never interleave on disk at once.
+  /// away — this lock only gates when a connection is allowed to start
+  /// writing, so two transfers never interleave on disk at once.
   Future<void> _transferLock = Future.value();
   int _queueLength = 0;
 
@@ -80,6 +173,7 @@ class FileReceiver {
     this.onQueued,
     this.onProgress,
     this.onComplete,
+    this.onBatchComplete,
     this.onError,
     this.onIncomingRequest,
   });
@@ -119,9 +213,6 @@ class FileReceiver {
     _running = true;
     onStatus?.call('Secure receiver listening on port $port (TLS)');
 
-    // Start the small cert exchange server too, so senders can fetch
-    // our public cert automatically instead of needing it copied by
-    // hand. Same lifecycle as the main server — both start together.
     _certServer = CertServer(
       certPath: certPath,
       port: certServerPort,
@@ -137,23 +228,17 @@ class FileReceiver {
   void _acceptLoop() async {
     await for (final socket in _serverSocket!) {
       onConnection?.call(socket.remoteAddress.address, socket.remotePort);
-      // Don't await here — accepting new TCP connections must never
-      // block on a transfer that's already in progress. Queueing is
-      // handled inside _queueAndHandle via _transferLock.
       _queueAndHandle(socket);
     }
   }
 
   /// Queues this connection behind any transfer already in progress,
-  /// then runs it once it's this connection's turn. Connections are
-  /// served strictly in the order they arrived (FIFO).
+  /// then runs it once it's this connection's turn (FIFO).
   Future<void> _queueAndHandle(SecureSocket socket) async {
     final myTurn = _transferLock;
     final position = _queueLength;
     _queueLength++;
 
-    // Chain the next lock onto this one — the next caller waits for
-    // this transfer (and everyone ahead of it) to finish first.
     final completer = Completer<void>();
     _transferLock = completer.future;
 
@@ -182,101 +267,86 @@ class FileReceiver {
 
   Future<void> _handleConnection(SecureSocket socket) async {
     final senderIp = socket.remoteAddress.address;
+    final reader = _SocketReader(socket);
+
     try {
-      final bytesBuilder = BytesBuilder();
-      int? headerLength;
-      Map<String, dynamic>? header;
-      IOSink? fileSink;
-      String? filename;
-      int? totalSize;
-      int fileBytesReceived = 0;
-      bool headerParsed = false;
-      bool rejected = false;
-
-      // Bytes that arrive in the same chunk as the header tail need to
-      // be held until the accept/reject decision is made, then either
-      // written (accepted) or discarded (rejected).
-      List<int>? pendingBytesAfterHeader;
-
-      await for (final data in socket) {
-        if (rejected) break;
-
-        if (!headerParsed) {
-          bytesBuilder.add(data);
-
-          if (headerLength == null && bytesBuilder.length >= 4) {
-            final buffer = bytesBuilder.takeBytes();
-            final byteData =
-                ByteData.sublistView(Uint8List.fromList(buffer.sublist(0, 4)));
-            headerLength = byteData.getUint32(0, Endian.big);
-            bytesBuilder.add(buffer.sublist(4));
-          }
-
-          if (headerLength != null && bytesBuilder.length >= headerLength) {
-            final buffer = bytesBuilder.takeBytes();
-            final jsonBytes = buffer.sublist(0, headerLength);
-            final jsonStr = utf8.decode(jsonBytes);
-            header = jsonDecode(jsonStr);
-            filename = header!['filename'];
-            totalSize = header['size'];
-            headerParsed = true;
-            pendingBytesAfterHeader = buffer.sublist(headerLength);
-
-            // Ask whoever set up this receiver whether to accept this
-            // file — the GUI shows a popup here; the CLI (no callback
-            // provided) accepts automatically, same as before.
-            bool accepted = true;
-            if (onIncomingRequest != null) {
-              try {
-                accepted = await onIncomingRequest!(
-                  filename!,
-                  totalSize!,
-                  senderIp,
-                ).timeout(requestTimeout);
-              } catch (_) {
-                accepted = false; // timed out or threw — treat as reject
-              }
-            }
-
-            if (!accepted) {
-              rejected = true;
-              onError?.call('Transfer of "$filename" from $senderIp was rejected.');
-              break;
-            }
-
-            final file = File('${targetDir.path}/$filename');
-            fileSink = file.openWrite();
-
-            if (pendingBytesAfterHeader.isNotEmpty) {
-              fileSink.add(pendingBytesAfterHeader);
-              fileBytesReceived += pendingBytesAfterHeader.length;
-              onProgress?.call(TransferProgress(
-                filename: filename!,
-                bytesDone: fileBytesReceived,
-                totalBytes: totalSize!,
-              ));
-            }
-          }
-        } else {
-          fileSink!.add(data);
-          fileBytesReceived += data.length;
-          onProgress?.call(TransferProgress(
-            filename: filename!,
-            bytesDone: fileBytesReceived,
-            totalBytes: totalSize!,
-          ));
-        }
-      }
-
-      if (rejected) {
+      final manifestJson = await reader.readLengthPrefixedJson();
+      if (manifestJson == null) {
+        onError?.call('Connection from $senderIp closed before sending a manifest.');
         return;
       }
 
-      if (fileSink != null) {
+      final filesJson = manifestJson['files'] as List<dynamic>;
+      final manifestEntries = filesJson
+          .map((e) => ManifestEntry.fromJson(e as Map<String, dynamic>))
+          .toList();
+
+      if (manifestEntries.isEmpty) {
+        onError?.call('Empty manifest from $senderIp — nothing to receive.');
+        return;
+      }
+
+      // Ask whoever set up this receiver whether to accept the whole
+      // batch — one decision covers every file in it (matches the
+      // "1-2 clicks" goal; no per-file prompts).
+      bool accepted = true;
+      if (onIncomingRequest != null) {
+        try {
+          accepted = await onIncomingRequest!(manifestEntries, senderIp)
+              .timeout(requestTimeout);
+        } catch (_) {
+          accepted = false;
+        }
+      }
+
+      if (!accepted) {
+        onError?.call(
+            'Transfer of ${manifestEntries.length} file(s) from $senderIp was rejected.');
+        return;
+      }
+
+      // Receive each file in order, exactly as described in the manifest.
+      for (var i = 0; i < manifestEntries.length; i++) {
+        final headerJson = await reader.readLengthPrefixedJson();
+        if (headerJson == null) {
+          onError?.call(
+              'Connection from $senderIp closed early — expected ${manifestEntries.length} file(s), got $i.');
+          return;
+        }
+
+        final filename = headerJson['filename'] as String;
+        final totalSize = headerJson['size'] as int;
+
+        final file = File('${targetDir.path}/$filename');
+        final fileSink = file.openWrite();
+
+        final completedFully = await reader.pipeExact(
+          totalSize,
+          fileSink,
+          (writtenSoFar) {
+            onProgress?.call(TransferProgress(
+              filename: filename,
+              bytesDone: writtenSoFar,
+              totalBytes: totalSize,
+              fileIndex: i + 1,
+              fileCount: manifestEntries.length,
+            ));
+          },
+        );
+
         await fileSink.flush();
         await fileSink.close();
-        onComplete?.call(filename!);
+
+        if (!completedFully) {
+          onError?.call(
+              'Connection from $senderIp closed mid-transfer of "$filename".');
+          return;
+        }
+
+        onComplete?.call(filename);
       }
+
+      onBatchComplete?.call(manifestEntries.length);
     } catch (e) {
       onError?.call('Error during transfer: $e');
     } finally {
