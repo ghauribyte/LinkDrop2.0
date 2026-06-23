@@ -103,6 +103,10 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
         if (!mounted) return;
         setState(() => _statusMessage = msg);
       },
+      onRejected: (msg) {
+        if (!mounted) return;
+        setState(() => _statusMessage = msg);
+      },
     );
 
     await _broadcaster!.start();

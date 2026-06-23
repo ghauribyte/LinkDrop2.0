@@ -23,6 +23,7 @@ void main(List<String> args) async {
     onComplete: (filename) => print('\nReceived: $filename'),
     onBatchComplete: (count) => print('\nTransfer complete ($count file(s)).'),
     onError: (msg) => print('\n$msg'),
+    onRejected: (msg) => print('\n$msg'),
   );
 
   final started = await receiver.start();

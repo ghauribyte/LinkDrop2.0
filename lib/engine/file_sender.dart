@@ -46,7 +46,7 @@ class FileSender {
     this.onProgress,
     this.onComplete,
     this.onError,
-  }) : assert(filePaths.length > 0, 'filePaths must not be empty');
+  });
 
   /// Convenience constructor for the common single-file case — same
   /// call shape as the old FileSender(filePath: ...) had, so existing
@@ -78,6 +78,11 @@ class FileSender {
   /// connection. Returns true only if every file sent successfully.
   /// Never throws and never calls exit() — caller decides what to do.
   Future<bool> send() async {
+    if (filePaths.isEmpty) {
+      onError?.call('No files to send.');
+      return false;
+    }
+
     // Validate every file exists before opening any connection — fail
     // fast rather than connecting and aborting partway through.
     final files = <File>[];
@@ -169,17 +174,23 @@ class FileSender {
         await _sendLengthPrefixedJson(socket, headerMap);
 
         int bytesSent = 0;
-        final fileStream = file.openRead();
-        await for (final chunk in fileStream) {
-          socket.add(chunk);
-          bytesSent += chunk.length;
-          onProgress?.call(TransferProgress(
-            filename: entry.name,
-            bytesDone: bytesSent,
-            totalBytes: entry.size,
-            fileIndex: i + 1,
-            fileCount: files.length,
-          ));
+        try {
+          final fileStream = file.openRead();
+          await for (final chunk in fileStream) {
+            socket.add(chunk);
+            bytesSent += chunk.length;
+            onProgress?.call(TransferProgress(
+              filename: entry.name,
+              bytesDone: bytesSent,
+              totalBytes: entry.size,
+              fileIndex: i + 1,
+              fileCount: files.length,
+            ));
+          }
+        } catch (e) {
+          onError?.call('Failed reading "${entry.name}" (file ${i + 1} of ${files.length}): $e');
+          socket.destroy();
+          return false;
         }
       }
 
