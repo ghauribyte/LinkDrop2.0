@@ -79,5 +79,42 @@ Topic: Automatic certificate exchange
 Decision: Add a small plain-TCP "cert server" (port 7980) alongside the existing secure file-receiving server. Anyone who connects to it receives the receiver's cert.pem contents immediately, no request format needed — connecting IS the request. The sender then computes the fingerprint from this fetched cert and proceeds with the existing TLS fingerprint-check flow (Decision 002/003) unchanged.
 Reason: Removes the manual "copy cert.pem to the sender's machine by hand" step, which was blocking the GUI send flow. A public certificate is not sensitive information — handing it out over plain TCP is exactly as safe as putting it on a public webpage. The actual trust decision still happens later, via fingerprint verification at TLS connect time.
 Consequences: One more open port per device (7980). Anyone on the network can ask any LinkDrop device for its cert — this is intentional and harmless, same as how AirDrop/Bluetooth pairing works without secrecy of the public key itself.
+
+## Decision 012
+Date: 2026-06-22
+Topic: Accept/reject before file write
+Decision: FileReceiver gained an optional onIncomingRequest(filename, size, senderIp) callback, awaited after the header is parsed but before any bytes are written to disk. Returning false closes the connection with nothing written. If not provided, behavior is unchanged (auto-accept) — so the CLI receiver.dart needed zero changes. A 60-second timeout auto-rejects if nobody responds, so a sender isn't stuck waiting forever.
+Reason: A real receiving device should let the person decide whether to accept an incoming file, not write it blindly. Decision 003 already established no-login trust-by-fingerprint; this adds the human-in-the-loop step the original CLI never had.
+Consequences: Bytes arriving in the same network chunk as the header tail must be held in memory until the decision is made, instead of being written immediately — small added complexity in FileReceiver, but contained to one method.
+
+## Decision 013
+Date: 2026-06-22
+Topic: Multi-file transfer protocol
+Decision: A single connection now sends a manifest first (file count + list of {name, size}), followed by each file's existing length-prefixed header + bytes, one after another, in order. One accept/reject decision covers the entire batch — no per-file prompts. A single-file send is just a manifest with one entry, so there's no special case for the old Phase 2/3 behavior.
+Reason: Implements Decision 009 (file-by-file, multi-file queue support) at the protocol level. One accept/reject for the whole batch matches the "1-2 clicks" goal in ROADMAP.md rather than prompting once per file.
+Consequences: Breaking change to the wire protocol — old single-file-only sender/receiver code cannot talk to the new manifest-based code. CLI sender.dart's argument order changed (cert now comes before the file list, since the file list is variable-length: `dart sender.dart <ip> <cert> <file1> [file2]...`). FileReceiver's internal parsing logic got meaningfully more complex (a small buffered _SocketReader helper was added to support reading repeated length-prefixed chunks off one stream).
+
+## Decision 014
+Date: 2026-06-22
+Topic: Receiver error handling hardening
+Decision: Added filename sanitization (strip path separators and ".." to prevent path traversal writes outside targetDir), manifest/header field validation (reject malformed JSON instead of throwing raw exceptions), partial-file cleanup on write failure or early disconnect (delete instead of leaving a corrupt file behind), and a separate onRejected callback distinct from onError — onError now means a true failure (bad network, disk full, malformed protocol); onRejected means an expected non-error outcome (user declined, queue timeout, sender disconnected early).
+Reason: Multi-file manifest protocol (Decision 013) increased failure surface area — more round trips, more files that can individually fail mid-batch. A receiver should never trust a filename from the network as-is, never leave broken partial files on disk, and a GUI needs to tell "something went wrong" apart from "the user said no."
+Consequences: onIncomingRequest callers (ReceiveScreen, future GUI code) must wire onRejected separately or those messages go nowhere silently. CLI receiver.dart updated to print onRejected the same way as onError, no behavior change there.
+
+# Decision 014
+Date: 2026-06-23
+Topic: Target platform scope
+Decision: Linux and Android only. iOS, Windows, macOS deferred.
+Reason: Faster iteration, avoid iOS socket restrictions.
+Consequences: Decision 007 partially superseded.
+
+# Decision 015
+Date: 2026-06-23
+Topic: Cert generation on Android
+Decision: Generate self-signed cert in-app using Dart (basic_utils package)
+instead of requiring openssl CLI.
+Reason: Android has no openssl. Users can't run terminal commands.
+Consequences: Adds basic_utils dependency. Cert generated once on
+first launch, stored in app documents dir.
 ## Pending Decisions (need to be made before coding starts)
 _(none — all core decisions made, ready to continue through the phases)_
