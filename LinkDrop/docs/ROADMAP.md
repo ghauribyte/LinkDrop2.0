@@ -4,9 +4,9 @@
 
 | Phase | Goal | What to build | Status |
 |---|---|---|---|
-| 1 | Core discovery | Devices find each other on the network, console logs only, no GUI | Not started |
-| 2 | Basic transfer | Send/receive a file over TCP between two devices, no encryption yet | Not started |
-| 3 | Security | Add TLS, add device verification before transfer | Not started |
+| 1 | Core discovery | Devices find each other on the network, console logs only, no GUI | Complete |
+| 2 | Basic transfer | Send/receive a file over TCP between two devices, no encryption yet | Complete |
+| 3 | Security | Add TLS, add device verification before transfer | Next up |
 | 4 | GUI | Build device list, send/accept popup, progress bar | Not started |
 | 5 | Polish | Pause/resume, folder support, transfer history, error handling | Not started |
 | 6 | Cross-platform testing | Test on Windows, Mac, Linux, fix network edge cases | Not started |
