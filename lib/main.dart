@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'screens/device_list_screen.dart';
 import 'screens/receive_screen.dart';
 import 'screens/send_screen.dart';
+import 'screens/wifi_direct_screen.dart';
 
 void main() {
   runApp(const LinkDropApp());
@@ -56,6 +57,14 @@ class HomeScreen extends StatelessWidget {
               ),
               icon: const Icon(Icons.devices),
               label: const Text('Nearby Devices'),
+            ),
+            const SizedBox(height: 16),
+            OutlinedButton.icon(
+              onPressed: () => Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const WifiDirectScreen()),
+              ),
+              icon: const Icon(Icons.wifi_tethering),
+              label: const Text('Wi-Fi Direct'),
             ),
           ],
         ),
