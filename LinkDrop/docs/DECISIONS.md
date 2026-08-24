@@ -116,5 +116,12 @@ instead of requiring openssl CLI.
 Reason: Android has no openssl. Users can't run terminal commands.
 Consequences: Adds basic_utils dependency. Cert generated once on
 first launch, stored in app documents dir.
+## Decision 016
+Date: 2026-08-24
+Topic: Planned future platform: Windows
+Decision: Windows support is planned as a future third platform, added after Linux+Android private-mode networking (Wi-Fi Direct + hotspot) is wired into the Transfer Engine and the Android cert-generation blocker is resolved. Not started yet — no code changes as of this entry.
+Reason: The engine/discovery/security layers (lib/engine/) are already cross-platform Dart with no Windows-specific gap, and the Flutter GUI already builds for Windows from the existing scaffold. The only missing piece is a Windows equivalent of the private-mode connection managers (hotspot_manager.dart uses Linux's nmcli; Android uses native WifiP2pManager) — likely a native plugin around Windows' Mobile Hotspot / WlanHostedNetwork APIs. Router-mode fallback would work immediately with no new code. Sequencing after Linux+Android are solid avoids maintaining three half-finished platforms at once (Decision 014).
+Consequences: Decision 014's Linux+Android scope stays authoritative until this is picked up. When work starts, add a `hotspot_manager`-equivalent for Windows behind the same private-mode interface, plus GUI platform gating (see HotspotEntryPoint's Platform.isLinux check) extended to Windows.
+
 ## Pending Decisions (need to be made before coding starts)
 _(none — all core decisions made, ready to continue through the phases)_
