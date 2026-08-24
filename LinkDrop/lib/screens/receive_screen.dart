@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
 
+import '../engine/cert_manager.dart';
 import '../engine/discovery_broadcaster.dart';
 import '../engine/file_receiver.dart';
 import '../models/manifest_entry.dart';
@@ -15,10 +16,9 @@ import '../models/transfer_progress.dart';
 /// - Shows an accept/reject popup before any file is written to disk
 /// - Shows live progress once a transfer is accepted
 ///
-/// Needs a cert.pem + key.pem to already exist. For now this screen
-/// expects them at <app documents dir>/linkdrop/cert.pem and key.pem —
-/// generating/pairing certs automatically is a future task, not yet
-/// built. See TODO.md Phase 3 for how to generate them with openssl.
+/// Cert/key at <app documents dir>/linkdrop/cert.pem and key.pem are
+/// generated in-app on first launch via CertManager (Decision 015) —
+/// no openssl/shell step required, so this works on Android too.
 class ReceiveScreen extends StatefulWidget {
   const ReceiveScreen({super.key});
 
@@ -47,11 +47,12 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
     final certPath = '${linkdropDir.path}/cert.pem';
     final keyPath = '${linkdropDir.path}/key.pem';
 
-    if (!await File(certPath).exists() || !await File(keyPath).exists()) {
+    try {
+      await CertManager.ensureCertExists(certPath: certPath, keyPath: keyPath);
+    } catch (e) {
       if (!mounted) return;
       setState(() {
-        _errorMessage =
-            'No certificate found at $certPath.\nGenerate one with openssl first (see TODO.md Phase 3), then restart this screen.';
+        _errorMessage = 'Could not generate certificate: $e';
       });
       return;
     }

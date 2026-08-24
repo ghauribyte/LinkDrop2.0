@@ -4,9 +4,7 @@
 _(none)_
 
 ## Pending Review
-- [ ] Re-run `broadcaster.dart` + `listener.dart` for real to confirm Phase 1 actually works (checked off before Dart was installed — may not have been truly tested)
-- [ ] Test mismatched cert rejection: generate a second cert pair, pass wrong cert to sender — must abort with clear error, no data sent
-- [ ] Test TLS transfer on two physical devices on the same Wi-Fi (loopback done, physical not yet)
+- [ ] Receiving on Android — cert.pem/key.pem now auto-generate in-app via CertManager (basic_utils, Decision 015), verified working over the CLI harness on loopback. Still needs a manual test on a real Android device before this can be marked Done. See docs/TASK.md 2026-08-24.
 
 ## Blocked
 _(none)_
@@ -34,7 +32,27 @@ _(none)_
 - [x] Build CertServer + fetchCert (lib/engine/cert_exchange.dart) — automatic cert exchange over plain TCP
 - [x] Wire CertServer into FileReceiver (starts/stops alongside main TLS server)
 - [x] Tested fetch_cert_test.dart against live receiver — confirmed valid PEM returned over the network
-## Next Up — Phase 4: Flutter GUI
-- [ ] Send file flow (file picker → pick device → transfer)
-- [ ] Accept/reject popup on receiver side
-- [ ] Progress bar (per file + overall)
+- [x] Send file flow (file picker → pick device → transfer)
+- [x] Accept/reject popup on receiver side
+- [x] Fixed receiver-side broadcasting gap — ReceiveScreen now runs DiscoveryBroadcaster + FileReceiver together as one unit
+- [x] Progress bar on receiver side (ReceiveScreen shows live progress once accepted)
+- [x] Multi-file/folder support — manifest-based protocol, one accept/reject for the whole batch (Decision 013)
+- [x] Updated FileSender for multiple files per connection
+- [x] Updated FileReceiver with buffered _SocketReader for repeated manifest/header/body reads
+- [x] Updated send_screen.dart for multi-select file picking
+- [x] Updated receive_screen.dart popup to show batch file list + total size
+- [x] Updated CLI sender.dart/receiver.dart for new protocol and batch progress display
+- [x] Tested: single-file regression, 3-file batch send, CLI multi-file with new arg order — all passed
+- [x] Error handling polish — filename sanitization, manifest/header validation, partial-file cleanup, onRejected vs onError split (Decision 014)
+- [x] Android SDK command-line tools installed and configured (cmdline-tools, platform-tools, platforms;android-36, build-tools)
+- [x] Resolved Java/Gradle toolchain detection failure (stale Gradle cache after JDK install)
+- [x] Bumped compileSdk to 36 in android/app/build.gradle.kts
+- [x] Pinned file_picker to 10.3.10 (11.0.0+ has an upstream regression — missing kotlin-android plugin application, breaks GeneratedPluginRegistrant.java compile)
+- [x] App successfully built and ran on real Android device (Pixel 7, Android 16/API 36)
+- [x] Confirmed phone-to-laptop send over router Wi-Fi — cross-device discovery and TLS transfer both work on Android
+## Next Up — Phase 5: Polish
+## Next Up — Android Wi-Fi Direct
+- [ ] Native Kotlin WifiP2pManager implementation
+- [ ] Flutter platform channel bridge (MethodChannel/EventChannel)
+- [ ] Runtime permission handling (NEARBY_WIFI_DEVICES on Android 13+, location on older versions)
+- [ ] Network-mode-selection logic (Decision 006) — private mode first, router fallback — doesn't exist in code yet

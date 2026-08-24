@@ -1,17 +1,8 @@
 # Project Log
 
 ## Status (always latest)
-- Completion: ~55% (Phases 1-4 complete)
-- Phase: Phase 4 complete, moving to Phase 5 (Polish)
-- Active milestone: Phase 5 planning
-- Network strategy locked: private Wi-Fi first, router Wi-Fi fallback (Decision 006)
-- GUI framework locked: Flutter (Decision 007)
-- Engine language locked: Dart (Decision 008)
-- File transfer method locked: file-by-file, multi-file supported (Decision 009)
-- Transfer queueing locked: FIFO, one at a time on receiver (Decision 010)
-- Cert exchange locked: automatic via plain-TCP CertServer (Decision 011)
-- Accept/reject locked: onIncomingRequest hook before any file write (Decision 012)
-
+- Active milestone: Android Wi-Fi Direct implementation
+- Android build environment confirmed working: SDK 36, file_picker pinned to 10.3.10, tested on real Pixel 7 device
 ## Completed Work
 - Created `broadcaster.dart` and `listener.dart` for UDP discovery (Phase 1)
 - Created `sender.dart` and `receiver.dart` for raw TCP file transfer (Phase 2)
@@ -133,3 +124,20 @@ See TASK_BOARD.md.
 **Files Modified:** lib/engine/file_receiver.dart, lib/screens/receive_screen.dart (new), lib/main.dart, pubspec.yaml
 **Decisions Made:** 012 (accept/reject before file write)
 **Remaining Work:** Phase 4 complete. Begin Phase 5 — pause/resume, folder support, transfer history, error handling polish.
+### Session 2026-06-22 (Multi-File / Folder Support)
+**Summary:** Implemented Decision 013 — manifest-first wire protocol so one connection can send multiple files in sequence, fulfilling Decision 009's "file-by-file, multi-file queue" requirement at the protocol level. FileSender now takes filePaths (List<String>) instead of one filePath, sends a manifest then loops through each file. FileReceiver was restructured around a new internal _SocketReader helper that supports repeated "read exactly N bytes" operations (needed since the manifest, each file's header, and each file's body are all length-prefixed reads in sequence on one stream — the old single-pass parser only handled one header + one body). Added ManifestEntry model and extended TransferProgress with optional fileIndex/fileCount fields (default to 1/1 so single-file callers are unaffected). onIncomingRequest callback signature changed from (filename, size, senderIp) to (List<ManifestEntry>, senderIp) — one accept/reject decision now covers the whole batch. Updated send_screen.dart for multi-select file picking, receive_screen.dart's popup to list all incoming files with total size, and both CLI wrappers (sender.dart's argument order changed: cert now precedes the file list). Hit one real bug during testing unrelated to this change — a stale FileReceiver process from an earlier flutter run session was still holding ports 7979/7980, causing a cert fingerprint mismatch and a "address already in use" error; resolved by finding and killing the stale process via lsof. After cleanup, all three planned tests passed: single-file regression (unchanged behavior), 3-file batch send via the GUI, and CLI multi-file send with the new argument order.
+**Files Modified:** lib/models/manifest_entry.dart (new), lib/models/transfer_progress.dart, lib/engine/file_sender.dart, lib/engine/file_receiver.dart, lib/screens/send_screen.dart, lib/screens/receive_screen.dart, sender.dart, receiver.dart
+**Decisions Made:** 013 (multi-file manifest protocol)
+**Remaining Work:** Transfer history, error handling polish, pause/resume (remaining Phase 5 items)
+
+### Session 2026-06-22 (Error Handling Polish)
+**Summary:** Hardened FileReceiver against five gaps found by review: (1) filenames from the network are now sanitized — path separators and ".." stripped — preventing path traversal writes outside targetDir; (2) manifest and per-file header JSON fields are validated before use, malformed input is rejected with a clear message instead of throwing a raw exception; (3) a partial/corrupt file is now deleted on write failure or early disconnect instead of being left on disk; (4) added a separate onRejected callback for expected non-error outcomes (user declined, queue timeout, early disconnect) so onError now means a true failure only; (5) replaced an assert() in FileSender with a real runtime check, since asserts are stripped in release builds. FileSender also now reports which specific file (by name and index) failed if a per-file read error occurs mid-batch. Wired onRejected into receive_screen.dart and the CLI receiver.dart. During testing, hit a false "accept/reject not working" bug — root cause was a stale FileReceiver process from an earlier session still bound to ports 7979/7980, silently auto-accepting with old code. Resolved via lsof + kill + full flutter run restart (hot reload alone doesn't reset open server sockets / re-run initState).
+**Files Modified:** lib/engine/file_receiver.dart, lib/engine/file_sender.dart, lib/screens/receive_screen.dart, receiver.dart
+**Decisions Made:** 014 (receiver error handling hardening)
+**Remaining Work:** Transfer history, pause/resume, two-physical-device test, mismatched-cert test (all still pending)
+
+### Session 2026-06-23 (Android Build + Router Wi-Fi Checkpoint)
+**Summary:** Set up Android SDK via command-line tools (cmdline-tools, platform-tools, platforms;android-36, build-tools 28.0.3) per Flutter's exact version requirements. Resolved a Java/Gradle toolchain detection failure caused by a stale Gradle cache (javac existed correctly on disk but Gradle's cached toolchain metadata didn't recognize it — fixed via gradlew --stop + clearing ~/.gradle/caches). Bumped compileSdk from flutter.compileSdkVersion to a hardcoded 36 in build.gradle.kts to satisfy a transitive dependency requirement. Hit a real upstream bug in file_picker 11.0.0+ (confirmed via GitHub issue #1973): the package's own android/build.gradle doesn't apply the kotlin-android plugin, so GeneratedPluginRegistrant.java can't resolve FilePickerPlugin at compile time — no fix exists upstream yet. Resolved by pinning file_picker to 10.3.10 (last confirmed-working version per the plugin's changelog) and reverting send_screen.dart to the corresponding FilePicker.platform.pickFiles() API. App successfully built and launched on a real Pixel 7 (Android 16, API 36). Tested phone-to-laptop file send over router Wi-Fi — cross-device discovery (UDP broadcast) and TLS file transfer both confirmed working between genuinely separate devices for the first time (previous tests were same-machine-only). Receiving on the phone failed due to missing cert.pem/key.pem — the existing manual-openssl-setup workflow doesn't translate to mobile (no shell access). Identified basic_utils (pure-Dart RSA/X509 cert generation) as the fix, but deliberately deferred building it to avoid further scope creep this session — phone-to-laptop send was the priority proof, and it succeeded.
+**Files Modified:** android/app/build.gradle.kts, pubspec.yaml (file_picker pinned to 10.3.10), lib/screens/send_screen.dart (FilePicker.platform.pickFiles API)
+**Decisions Made:** none (environment/dependency fixes, no architecture changes)
+**Remaining Work:** Cert auto-generation for mobile (deferred). Begin Wi-Fi Direct native implementation (Decision 006's private-mode requirement) — biggest remaining architectural gap, needs native Kotlin + platform channel work.

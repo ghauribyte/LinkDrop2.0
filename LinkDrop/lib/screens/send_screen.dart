@@ -13,14 +13,21 @@ enum _SendState { idle, pickingDevice, fetchingCert, sending, done, failed }
 
 /// Orchestrates the full send flow:
 /// 1. Pick one or more files from disk (Decision 013 — multi-file)
-/// 2. Pick a device from DeviceListScreen
+/// 2. Pick a device from DeviceListScreen — or, if [presetDevice] is
+///    given, skip discovery entirely and use that device directly.
+///    This is how a private-mode connection (Wi-Fi Direct, hotspot)
+///    reaches the transfer engine: those connections already know the
+///    peer's IP from the platform API, so there's no need for UDP
+///    broadcast discovery to also work over that interface.
 /// 3. Fetch that device's cert automatically (Decision 011)
 /// 4. Hand off to the existing, already-tested FileSender
 ///
 /// This screen does not duplicate any transfer logic — it only wires
 /// together engine pieces that already work on their own.
 class SendScreen extends StatefulWidget {
-  const SendScreen({super.key});
+  final Device? presetDevice;
+
+  const SendScreen({super.key, this.presetDevice});
 
   @override
   State<SendScreen> createState() => _SendScreenState();
@@ -54,10 +61,13 @@ class _SendScreenState extends State<SendScreen> {
       _state = _SendState.pickingDevice;
     });
 
-    if (!mounted) return;
-    final device = await Navigator.of(context).push<Device>(
-      MaterialPageRoute(builder: (_) => const DeviceListScreen()),
-    );
+    Device? device = widget.presetDevice;
+    if (device == null) {
+      if (!mounted) return;
+      device = await Navigator.of(context).push<Device>(
+        MaterialPageRoute(builder: (_) => const DeviceListScreen()),
+      );
+    }
 
     if (device == null) {
       // user backed out of device picker — reset to idle
@@ -163,7 +173,9 @@ class _SendScreenState extends State<SendScreen> {
             Icon(Icons.send,
                 size: 48, color: Theme.of(context).colorScheme.primary),
             const SizedBox(height: 16),
-            const Text('Pick one or more files to send to a nearby device.'),
+            Text(widget.presetDevice != null
+                ? 'Pick one or more files to send to ${widget.presetDevice!.name}.'
+                : 'Pick one or more files to send to a nearby device.'),
             const SizedBox(height: 24),
             FilledButton.icon(
               onPressed: _pickFilesAndSend,
