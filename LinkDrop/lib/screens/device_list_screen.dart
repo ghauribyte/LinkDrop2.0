@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import '../engine/discovery_broadcaster.dart';
 import '../engine/discovery_listener.dart';
 import '../models/device.dart';
+import '../theme/linkdrop_theme.dart';
 import '../widgets/linkdrop_shell.dart';
 import '../widgets/linkdrop_widgets.dart';
 import 'send_screen.dart';
@@ -267,8 +268,16 @@ class _DeviceListScreenState extends State<DeviceListScreen> {
         const SizedBox(height: 22),
         SizedBox(
           width: double.infinity,
-          child: OutlinedButton.icon(
+          // Filled green, matching the commit-point button on Send: this is
+          // the action the whole pane exists to offer, and an outline made
+          // it read as just another option next to "Pick files".
+          child: FilledButton.icon(
             onPressed: () => _confirm(device),
+            style: FilledButton.styleFrom(
+              backgroundColor: context.transferColors.success,
+              foregroundColor: Colors.white,
+              minimumSize: const Size(0, 44),
+            ),
             icon: const Icon(Icons.send_outlined, size: 18),
             label: const Text('Send to this device'),
           ),

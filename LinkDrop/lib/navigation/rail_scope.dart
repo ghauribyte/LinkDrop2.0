@@ -7,6 +7,7 @@ import '../screens/home_screen.dart';
 import '../screens/hotspot_screen.dart';
 import '../screens/join_hotspot_screen.dart';
 import '../screens/receive_screen.dart';
+import '../screens/received_files_screen.dart';
 import '../screens/send_screen.dart';
 import '../screens/wifi_direct_screen.dart';
 
@@ -42,6 +43,11 @@ List<RailDestination> railDestinations() {
       icon: Icons.download_outlined,
       label: 'Receive',
       builder: (_) => const ReceiveScreen(),
+    ),
+    RailDestination(
+      icon: Icons.folder_open_outlined,
+      label: 'Received',
+      builder: (_) => const ReceivedFilesScreen(),
     ),
     RailDestination(
       icon: Icons.devices_outlined,

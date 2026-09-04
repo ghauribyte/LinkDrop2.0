@@ -9,6 +9,7 @@ import '../engine/device_identity.dart';
 import '../engine/discovery_broadcaster.dart';
 import '../engine/file_receiver.dart';
 import '../engine/media_export.dart';
+import '../engine/received_log.dart';
 import '../engine/throughput_meter.dart';
 import '../engine/transfer_wake_lock.dart';
 import '../models/manifest_entry.dart';
@@ -168,6 +169,7 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
             _RecentEntry(label: filename, time: DateTime.now()),
           );
         });
+        _recordReceived(filename);
         _publishToGallery(filename);
       },
       onBatchComplete: (count) => _safeSetState(() {
@@ -250,6 +252,39 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
   /// is, so a gallery problem never costs the user the transfer.
   ///
   /// No-op on Linux, where the received folder is already user-visible.
+  /// Adds a completed file to the durable received log.
+  ///
+  /// Written before the gallery export so the entry survives an export
+  /// failure — a file the user can still open from its staging path is
+  /// better than one that vanishes from the list because publishing broke.
+  /// The `content://` URI is filled in afterwards by [_publishToGallery].
+  ///
+  /// Failures here are silent: the transfer itself succeeded, and losing a
+  /// history row must not be reported as the transfer going wrong.
+  Future<void> _recordReceived(String filename) async {
+    final dir = _receivedDir;
+    if (dir == null) return;
+
+    final file = File('${dir.path}/$filename');
+    int size;
+    try {
+      size = await file.length();
+    } catch (_) {
+      return;
+    }
+
+    try {
+      await ReceivedLog(directory: dir).add(ReceivedFile(
+        name: filename,
+        path: file.path,
+        bytes: size,
+        receivedAt: DateTime.now(),
+      ));
+    } catch (_) {
+      // History is a convenience; never surface this as a transfer error.
+    }
+  }
+
   Future<void> _publishToGallery(String filename) async {
     final dir = _receivedDir;
     if (dir == null || !MediaExport.isSupported) return;
@@ -261,6 +296,16 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
       onError: (msg) => _safeSetState(() => _statusMessage = msg),
     );
     if (uri == null) return;
+
+    // The staging copy is about to be deleted, so the MediaStore URI
+    // becomes the only way to open this file — record it before the path
+    // it was logged under stops resolving.
+    try {
+      await ReceivedLog(directory: dir)
+          .setContentUri(path: staged.path, contentUri: uri);
+    } catch (_) {
+      // Non-fatal: the entry simply keeps its (now stale) path.
+    }
 
     try {
       await staged.delete();

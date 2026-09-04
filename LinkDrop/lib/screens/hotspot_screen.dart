@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
 import '../engine/hotspot_manager.dart';
+import '../theme/linkdrop_theme.dart';
 import '../widgets/linkdrop_shell.dart';
 import '../widgets/linkdrop_widgets.dart';
 import 'receive_screen.dart';
@@ -300,6 +301,11 @@ class _HotspotScreenState extends State<HotspotScreen> {
           FilledButton.icon(
             onPressed: () => Navigator.of(context).push(
               MaterialPageRoute(builder: (_) => const SendScreen()),
+            ),
+            style: FilledButton.styleFrom(
+              backgroundColor: context.transferColors.success,
+              foregroundColor: Colors.white,
+              minimumSize: const Size(0, 44),
             ),
             icon: const Icon(Icons.send_outlined, size: 18),
             label: const Text('Send files'),

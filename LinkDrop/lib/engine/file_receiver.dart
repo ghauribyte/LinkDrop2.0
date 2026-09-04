@@ -64,15 +64,26 @@ class _SocketReader {
       final hasMore = await _iterator!.moveNext();
       if (!hasMore) return false;
       final data = _iterator!.current;
-      final take = data.length < remaining ? data.length : remaining;
+
+      // The common case by far is a chunk that fits entirely inside what
+      // is still expected. Handing the buffer straight to the sink avoids
+      // copying every byte of the file an extra time on the way to disk.
+      if (data.length <= remaining) {
+        sink.add(data);
+        written += data.length;
+        remaining -= data.length;
+        onChunk(written);
+        continue;
+      }
+
+      // Only the final chunk of a file straddles the boundary into the
+      // next file's header, so the copy here happens once per file.
+      final take = remaining;
       sink.add(data.sublist(0, take));
       written += take;
       remaining -= take;
       onChunk(written);
-
-      if (take < data.length) {
-        _buffer = data.sublist(take);
-      }
+      _buffer = data.sublist(take);
     }
     return true;
   }
@@ -92,6 +103,11 @@ String _sanitizeFilename(String name) {
 /// or more files per connection, using a manifest-first wire protocol
 /// (Decision 013 — multi-file support).
 class FileReceiver {
+  /// Minimum gap between progress callbacks. Each one drives setState on
+  /// the GUI, so this keeps rendering from becoming the ceiling on receive
+  /// speed. Mirrors the same constant in FileSender.
+  static const _progressInterval = Duration(milliseconds: 100);
+
   final Directory targetDir;
   final String certPath;
   final String keyPath;
@@ -312,12 +328,23 @@ class FileReceiver {
           return;
         }
 
+        var lastProgressAt = DateTime.now();
         bool completedFully;
         try {
           completedFully = await reader.pipeExact(
             totalSize,
             fileSink,
             (writtenSoFar) {
+              // Throttled for the same reason as the sender: every call
+              // drives setState, and reporting per network chunk means the
+              // GUI rebuild rate becomes the ceiling on receive speed. The
+              // last byte always reports so the bar reaches 100%.
+              final now = DateTime.now();
+              if (writtenSoFar < totalSize &&
+                  now.difference(lastProgressAt) < _progressInterval) {
+                return;
+              }
+              lastProgressAt = now;
               onProgress?.call(TransferProgress(
                 filename: filename,
                 bytesDone: writtenSoFar,

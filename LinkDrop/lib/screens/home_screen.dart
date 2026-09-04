@@ -10,6 +10,7 @@ import 'device_list_screen.dart';
 import 'hotspot_screen.dart';
 import 'join_hotspot_screen.dart';
 import 'receive_screen.dart';
+import 'received_files_screen.dart';
 import 'send_screen.dart';
 import 'wifi_direct_screen.dart';
 
@@ -209,6 +210,12 @@ class _HomeScreenState extends State<HomeScreen> {
   /// Platform-gated: a mode that does not exist here is absent, not disabled.
   List<Widget> _connectionModes(BuildContext context) {
     return [
+      _ModeRow(
+        icon: Icons.folder_open_outlined,
+        title: 'Received files',
+        subtitle: 'Everything sent to this device',
+        onTap: () => _open((_) => const ReceivedFilesScreen()),
+      ),
       _ModeRow(
         icon: Icons.devices_outlined,
         title: 'Nearby devices',

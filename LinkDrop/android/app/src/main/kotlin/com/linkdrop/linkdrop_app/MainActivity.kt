@@ -30,6 +30,7 @@ private const val METHOD_CHANNEL = "linkdrop/wifi_direct"
 private const val EVENT_CHANNEL = "linkdrop/wifi_direct_events"
 private const val MEDIA_CHANNEL = "linkdrop/media_store"
 private const val WAKE_LOCK_CHANNEL = "linkdrop/wake_lock"
+private const val REVEAL_CHANNEL = "linkdrop/reveal"
 
 class MainActivity : FlutterActivity() {
     private var manager: WifiP2pManager? = null
@@ -38,6 +39,7 @@ class MainActivity : FlutterActivity() {
     private var eventSink: EventChannel.EventSink? = null
     private var multicastLock: WifiManager.MulticastLock? = null
     private var transferWakeLock: PowerManager.WakeLock? = null
+    private var transferWifiLock: WifiManager.WifiLock? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -66,6 +68,18 @@ class MainActivity : FlutterActivity() {
                     "export" -> exportToMediaStore(
                         call.argument("path"),
                         call.argument("filename"),
+                        result
+                    )
+                    else -> result.notImplemented()
+                }
+            }
+
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, REVEAL_CHANNEL)
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "open" -> openReceivedFile(
+                        call.argument("path"),
+                        call.argument("uri"),
                         result
                     )
                     else -> result.notImplemented()
@@ -404,21 +418,101 @@ class MainActivity : FlutterActivity() {
      * transitions — a double acquire here would otherwise need a matching
      * double release to actually let go.
      */
+    /**
+     * Opens a received file in whatever app handles its type — the gallery
+     * for photos and video, a viewer for anything else.
+     *
+     * Prefers the MediaStore content:// URI: once a file has been exported
+     * to the gallery the app-private staging copy is deleted, so the path
+     * is stale and only the URI still resolves. The path is a fallback for
+     * files that never made it to the gallery, and needs a FileProvider
+     * grant since a raw file:// URI is not permitted to cross app
+     * boundaries on modern Android.
+     */
+    private fun openReceivedFile(path: String?, uri: String?, result: MethodChannel.Result) {
+        val target: Uri? = when {
+            uri != null -> Uri.parse(uri)
+            path != null -> {
+                val file = File(path)
+                if (!file.exists()) null
+                else try {
+                    androidx.core.content.FileProvider.getUriForFile(
+                        this,
+                        "$packageName.fileprovider",
+                        file
+                    )
+                } catch (e: Exception) {
+                    null
+                }
+            }
+            else -> null
+        }
+
+        if (target == null) {
+            result.error("NOT_FOUND", "That file is no longer available.", null)
+            return
+        }
+
+        val mime = path?.let { mimeTypeOf(File(it).name) } ?: "*/*"
+        val intent = Intent(Intent.ACTION_VIEW).apply {
+            setDataAndType(target, mime)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+
+        try {
+            startActivity(intent)
+            result.success(true)
+        } catch (e: Exception) {
+            result.error("NO_HANDLER", "No app can open this file.", null)
+        }
+    }
+
     private fun acquireTransferWakeLock() {
-        if (transferWakeLock?.isHeld == true) return
         try {
             val power = applicationContext.getSystemService(Context.POWER_SERVICE) as? PowerManager
-            transferWakeLock = power
-                ?.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "linkdrop:transfer")
-                ?.apply {
-                    setReferenceCounted(false)
-                    acquire(10 * 60 * 1000L /* 10 minutes */)
-                }
+            if (transferWakeLock?.isHeld != true) {
+                transferWakeLock = power
+                    ?.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "linkdrop:transfer")
+                    ?.apply {
+                        setReferenceCounted(false)
+                        acquire(10 * 60 * 1000L /* 10 minutes */)
+                    }
+            }
         } catch (e: Exception) {
-            // Non-fatal: the transfer proceeds without the protection: a
-            // screen timeout may still interrupt it, same as before this
-            // existed.
             transferWakeLock = null
+        }
+
+        // A PARTIAL_WAKE_LOCK keeps the CPU running but says nothing about
+        // the Wi-Fi radio, which is why holding one alone still lost
+        // transfers when the screen went off: Android put Wi-Fi into power
+        // save and the socket died. A WifiLock is the part that keeps the
+        // radio fully awake.
+        try {
+            val wifi = applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
+            if (transferWifiLock?.isHeld != true) {
+                val mode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    WifiManager.WIFI_MODE_FULL_LOW_LATENCY
+                } else {
+                    @Suppress("DEPRECATION")
+                    WifiManager.WIFI_MODE_FULL_HIGH_PERF
+                }
+                transferWifiLock = wifi?.createWifiLock(mode, "linkdrop:transfer")?.apply {
+                    setReferenceCounted(false)
+                    acquire()
+                }
+            }
+        } catch (e: Exception) {
+            transferWifiLock = null
+        }
+
+        // Belt and braces for the case that actually bit: the user puts the
+        // phone down mid-transfer and the screen times out. Keeping the
+        // screen on for the duration removes the whole class of problem
+        // rather than racing the OS's power management, and it is honest
+        // about what is happening — the phone is visibly busy.
+        runOnUiThread {
+            window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         }
     }
 
@@ -429,6 +523,17 @@ class MainActivity : FlutterActivity() {
             // Ignore — nothing useful to do if the release itself fails.
         }
         transferWakeLock = null
+
+        try {
+            transferWifiLock?.let { if (it.isHeld) it.release() }
+        } catch (e: Exception) {
+            // Ignore.
+        }
+        transferWifiLock = null
+
+        runOnUiThread {
+            window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
     }
 
     override fun onDestroy() {

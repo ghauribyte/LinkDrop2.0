@@ -7,10 +7,16 @@ class HotspotInfo {
   final String password;
   final String? ipAddress; // this device's IP on the hotspot subnet
 
+  /// True when the hotspot came up on 5 GHz. 2.4 GHz still works but is
+  /// several times slower, and that is worth telling the user rather than
+  /// leaving them to wonder why a direct link feels sluggish.
+  final bool band5GHz;
+
   HotspotInfo({
     required this.ssid,
     required this.password,
     this.ipAddress,
+    this.band5GHz = false,
   });
 
   /// Standard Wi-Fi QR code string — scannable by Android camera app
@@ -63,12 +69,37 @@ class HotspotManager {
     ]);
 
     // Create and bring up the hotspot.
-    final createResult = await Process.run('nmcli', [
+    //
+    // Band matters more than anything else in the transfer path: nmcli's
+    // default picks 2.4 GHz, where 802.11n on a 20 MHz channel tops out
+    // around 4-5 MB/s in practice no matter how fast both machines are.
+    // 5 GHz with a wide channel is several times that, and it is the same
+    // reason AirDrop negotiates a 5 GHz peer-to-peer link rather than
+    // reusing whatever 2.4 GHz network is already around.
+    //
+    // Not every radio or regulatory domain will accept AP mode on 5 GHz,
+    // so this tries the fast path and falls back rather than refusing to
+    // host a hotspot at all.
+    var band5GHz = true;
+    var createResult = await Process.run('nmcli', [
       'device', 'wifi', 'hotspot',
       'con-name', _connectionName,
       'ssid', ssid,
       'password', password,
+      'band', 'a',
     ]);
+
+    if (createResult.exitCode != 0) {
+      band5GHz = false;
+      onStatus?.call('5 GHz unavailable, falling back to 2.4 GHz...');
+      await Process.run('nmcli', ['connection', 'delete', _connectionName]);
+      createResult = await Process.run('nmcli', [
+        'device', 'wifi', 'hotspot',
+        'con-name', _connectionName,
+        'ssid', ssid,
+        'password', password,
+      ]);
+    }
 
     if (createResult.exitCode != 0) {
       final err = (createResult.stderr as String).trim();
@@ -76,10 +107,18 @@ class HotspotManager {
       return null;
     }
 
-    onStatus?.call('Hotspot "$ssid" is active. Waiting for the phone to join...');
+    onStatus?.call(band5GHz
+        ? 'Hotspot "$ssid" is active on 5 GHz. Waiting for the phone to join...'
+        : 'Hotspot "$ssid" is active on 2.4 GHz (slower). Waiting for the '
+            'phone to join...');
 
     final ip = await _getHotspotIp();
-    return HotspotInfo(ssid: ssid, password: password, ipAddress: ip);
+    return HotspotInfo(
+      ssid: ssid,
+      password: password,
+      ipAddress: ip,
+      band5GHz: band5GHz,
+    );
   }
 
   /// Tears down the hotspot by deleting the nmcli connection.

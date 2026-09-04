@@ -10,6 +10,7 @@ import 'package:linkdrop/screens/home_screen.dart';
 import 'package:linkdrop/screens/hotspot_screen.dart';
 import 'package:linkdrop/screens/join_hotspot_screen.dart';
 import 'package:linkdrop/screens/receive_screen.dart';
+import 'package:linkdrop/screens/received_files_screen.dart';
 import 'package:linkdrop/screens/send_screen.dart';
 import 'package:linkdrop/theme/linkdrop_theme.dart';
 
@@ -71,6 +72,19 @@ void main() {
     );
     // Let the pulse animations settle to a fixed frame.
     await tester.pump(const Duration(milliseconds: 300));
+  }
+
+  /// Lets a screen's real disk I/O finish before the frame is captured.
+  ///
+  /// `pumpAndSettle` cannot be used here: it drives a fake clock, so real
+  /// file reads never complete under it, and a screen showing a spinner
+  /// never settles anyway because the spinner animates forever. runAsync
+  /// steps outside the fake clock so the load actually resolves.
+  Future<void> settleAsyncLoad(WidgetTester tester) async {
+    await tester.runAsync(() async {
+      await Future<void>.delayed(const Duration(milliseconds: 80));
+    });
+    await tester.pump();
   }
 
   /// Screens that open sockets keep a repeating announce/prune timer alive.
@@ -181,6 +195,28 @@ void main() {
     await expectLater(
       find.byType(JoinHotspotScreen),
       matchesGoldenFile('goldens/join_hotspot_desktop.png'),
+    );
+  });
+
+  // Renders the empty state: the log lives in the app documents directory,
+  // which the path_provider mock points at a fresh scratch dir per test.
+  // pumpAndSettle is needed because the log is read asynchronously — a plain
+  // pump captures the loading spinner instead of the state worth checking.
+  testWidgets('received files · desktop', (tester) async {
+    await pumpAt(tester, size: desktop, child: const ReceivedFilesScreen());
+    await settleAsyncLoad(tester);
+    await expectLater(
+      find.byType(ReceivedFilesScreen),
+      matchesGoldenFile('goldens/received_files_desktop.png'),
+    );
+  });
+
+  testWidgets('received files · phone', (tester) async {
+    await pumpAt(tester, size: phone, child: const ReceivedFilesScreen());
+    await settleAsyncLoad(tester);
+    await expectLater(
+      find.byType(ReceivedFilesScreen),
+      matchesGoldenFile('goldens/received_files_phone.png'),
     );
   });
 }

@@ -601,8 +601,17 @@ class _SendScreenState extends State<SendScreen> {
       case _SendState.idle:
         if (_filePaths.isEmpty) return null;
         return row([
-          OutlinedButton.icon(
+          // The one commit-point on the screen, so it gets a filled green
+          // rather than the outline every other action uses — the design's
+          // "accent is an outline, never a flood" rule is what makes a
+          // single flood readable as *the* primary action.
+          FilledButton.icon(
             onPressed: _startSend,
+            style: FilledButton.styleFrom(
+              backgroundColor: context.transferColors.success,
+              foregroundColor: Colors.white,
+              minimumSize: const Size(0, 44),
+            ),
             icon: const Icon(Icons.send_outlined, size: 18),
             // The action names its own consequence.
             label: Text('Send ${_filePaths.length} '

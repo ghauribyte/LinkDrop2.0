@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Scopes what the FileProvider is willing to hand out. Only the app's own
+  files directory, which is where FileReceiver stages incoming transfers —
+  nothing broader, so a grant can never expose anything the user did not
+  receive through LinkDrop.
+-->
+<paths>
+    <files-path name="linkdrop_received" path="linkdrop/received/" />
+</paths>
