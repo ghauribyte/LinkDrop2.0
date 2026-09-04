@@ -40,6 +40,7 @@ class _LinkDropAppState extends State<LinkDropApp> {
 
     return MaterialApp(
       title: 'LinkDrop',
+      debugShowCheckedModeBanner: false,
       navigatorKey: _navigatorKey,
       // Dark is the design's default mode. Light is a full peer rather than a
       // tint and stays wired, so switching to ThemeMode.system is a one-line

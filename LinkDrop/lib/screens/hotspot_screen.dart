@@ -6,6 +6,8 @@ import 'package:qr_flutter/qr_flutter.dart';
 import '../engine/hotspot_manager.dart';
 import '../widgets/linkdrop_shell.dart';
 import '../widgets/linkdrop_widgets.dart';
+import 'receive_screen.dart';
+import 'send_screen.dart';
 import 'wifi_direct_screen.dart';
 
 /// Lets a Linux device share a direct subnet with a phone — without
@@ -19,11 +21,20 @@ import 'wifi_direct_screen.dart';
 ///      — no third-party scanner needed).
 ///   4. Phone joins the hotspot. Both devices are now on the same subnet
 ///      (typically 10.42.0.x). Discovery, send, receive — everything
-///      works normally from here.
+///      works normally from here: DiscoveryBroadcaster already sends to
+///      every interface's directed broadcast address rather than picking
+///      one, precisely so the hotspot's subnet isn't left out.
 ///
 /// Hosting is a desktop capability: on Android the phone is the joiner, so
 /// this screen says so plainly rather than offering something that cannot
 /// work there.
+///
+/// Send and Receive are reachable from *this* screen via [Navigator.push]
+/// rather than the rail: switching rail destinations disposes whatever
+/// screen is left, and this one tears the hotspot down in [dispose]. Pushing
+/// keeps it mounted underneath, so going to send or receive doesn't kill the
+/// connection that was just set up. [JoinHotspotScreen] already does the
+/// same thing on the joining side.
 class HotspotScreen extends StatefulWidget {
   const HotspotScreen({super.key, this.autoStart = true});
 
@@ -274,8 +285,33 @@ class _HotspotScreenState extends State<HotspotScreen> {
 
   Widget? _buildActions(BuildContext context) {
     if (!Platform.isLinux || _loading) return null;
-    return Row(
+
+    final hasHotspot = _info != null;
+    return Wrap(
+      spacing: 10,
+      runSpacing: 10,
       children: [
+        // Pushed on top of this screen rather than reached via the rail:
+        // switching rail destinations disposes whatever screen is left, and
+        // this one tears the hotspot down in dispose(). Pushing keeps
+        // HotspotScreen mounted underneath, so the connection the user just
+        // set up survives the trip to send or receive.
+        if (hasHotspot) ...[
+          FilledButton.icon(
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const SendScreen()),
+            ),
+            icon: const Icon(Icons.send_outlined, size: 18),
+            label: const Text('Send files'),
+          ),
+          OutlinedButton.icon(
+            onPressed: () => Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const ReceiveScreen()),
+            ),
+            icon: const Icon(Icons.download_outlined, size: 18),
+            label: const Text('Receive files'),
+          ),
+        ],
         OutlinedButton.icon(
           onPressed: _start,
           icon: const Icon(Icons.refresh, size: 18),
