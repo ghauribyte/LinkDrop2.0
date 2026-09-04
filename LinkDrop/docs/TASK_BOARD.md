@@ -4,6 +4,11 @@
 _(none)_
 
 ## Pending Review
+- [ ] **Android: 3 networking/cert bugs fixed, none hardware-verified** (see docs/TASK.md 2026-08-25):
+  - INTERNET permission was missing from main/AndroidManifest.xml — release builds had zero network access; presented as "Could not get <device>'s certificate". **This is the reported cert issue.**
+  - No MulticastLock — phone could send UDP discovery but often not receive it.
+  - CertManager wrote key.pem world-readable (0664 vs openssl's 0600); fixed.
+  - Kotlin change still needs `flutter build apk` to compile-verify (flutter analyze doesn't cover Kotlin).
 - [ ] Receiving on Android — cert.pem/key.pem now auto-generate in-app via CertManager (basic_utils, Decision 015), verified working over the CLI harness on loopback. Still needs a manual test on a real Android device before this can be marked Done. See docs/TASK.md 2026-08-24.
 
 ## Blocked
@@ -50,9 +55,17 @@ _(none)_
 - [x] Pinned file_picker to 10.3.10 (11.0.0+ has an upstream regression — missing kotlin-android plugin application, breaks GeneratedPluginRegistrant.java compile)
 - [x] App successfully built and ran on real Android device (Pixel 7, Android 16/API 36)
 - [x] Confirmed phone-to-laptop send over router Wi-Fi — cross-device discovery and TLS transfer both work on Android
+- [x] Pause/resume/cancel on the sending side (Decision 017 — in-session scope). Verified with pause_resume_test.dart (byte-identical after resume) and cancel_test.dart (no deadlock, no partial file).
+- [x] Linux→Linux hotspot join — HotspotManager.join()/leave() + join_hotspot_screen.dart, completing the host/join pair for router-free transfers.
+
 ## Next Up — Phase 5: Polish
+- [ ] Transfer history (sent/received log) — the remaining unstarted Phase 5 item
+- [ ] Cross-reconnect resume — needs a new decision first; conflicts with Decision 014's partial-file cleanup rule (see Decision 017)
+
 ## Next Up — Android Wi-Fi Direct
-- [ ] Native Kotlin WifiP2pManager implementation
-- [ ] Flutter platform channel bridge (MethodChannel/EventChannel)
-- [ ] Runtime permission handling (NEARBY_WIFI_DEVICES on Android 13+, location on older versions)
-- [ ] Network-mode-selection logic (Decision 006) — private mode first, router fallback — doesn't exist in code yet
+- [x] Native Kotlin WifiP2pManager implementation
+- [x] Flutter platform channel bridge (MethodChannel/EventChannel)
+- [x] Runtime permission handling (NEARBY_WIFI_DEVICES on Android 13+, location on older versions)
+- [x] Wi-Fi Direct / hotspot wired into the transfer engine (SendScreen.presetDevice — a private-mode link hands its known peer IP straight to FileSender, bypassing UDP discovery)
+- [ ] Automatic network-mode selection (Decision 006) — private mode first with router fallback. The private-mode paths now work, but choosing between them is still manual, not automatic.
+- [ ] **Untested on real hardware:** no Android device testing this session; Wi-Fi Direct needs two phones, hotspot join needs a second Linux box.

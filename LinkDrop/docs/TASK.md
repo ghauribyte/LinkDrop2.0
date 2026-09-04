@@ -4,6 +4,52 @@ Chronological log of work sessions on LinkDrop, one entry per task. Complements 
 
 ---
 
+## 2026-08-25 — Android networking/cert bug hunt
+
+**Status:** Three real bugs found and fixed. **Not verified on hardware.**
+
+**Why:** Reported "certificate issue" on Android. Investigating it turned up a permission bug that *presents* as a certificate error, plus two genuinely separate problems.
+
+### (a) Missing INTERNET permission — the actual "certificate issue"
+`android.permission.INTERNET` was declared only in `android/app/src/debug/` and `profile/` manifests — Flutter's stock scaffolding, commented "required for development". It was **absent from `main/AndroidManifest.xml`**.
+
+Consequence: a **release** build has no network access whatsoever. Every socket call fails — UDP discovery, the cert fetch on 7980, the TLS transfer on 7979. And because `send_screen.dart` reports a failed `fetchCert()` as *"Could not get <device>'s certificate"*, the symptom is a certificate error whose root cause is a missing permission. Debug builds work fine, which is exactly why this went unnoticed (all prior Android testing was via `flutter run`, i.e. debug).
+
+Fixed by declaring INTERNET in `main/`.
+
+### (b) No MulticastLock — one-way discovery
+Android's Wi-Fi driver drops incoming broadcast/multicast frames unless a `WifiManager.MulticastLock` is held. `CHANGE_WIFI_MULTICAST_STATE` was declared but no lock was ever acquired, so the phone could **send** UDP announcements (hence phone→laptop send working) while frequently never **receiving** peers — an empty device list on the phone. Acquired in `configureFlutterEngine`, released in `onDestroy`, wrapped in try/catch so failure degrades discovery rather than breaking the app.
+
+### (c) Private key written world-readable — regression from earlier today
+`CertManager` wrote `key.pem` with default umask (`0664`); the openssl workflow it replaced used `0600`. That left the TLS private key — the entire basis of the fingerprint trust model — readable by any local user. Self-inflicted, introduced earlier in this same session.
+
+Fixed by creating the file, tightening the mode, *then* writing key material, so the key is never on disk in a readable state even briefly. `chmod` is skipped on Android (no usable shell — the very reason `CertManager` exists — and per-app storage is already sandboxed). Verified: `key.pem` is `-rw-------`, `cert.pem` stays readable since it's deliberately served on 7980. `pause_resume_test.dart` still passes byte-identical afterwards.
+
+**Verification gap:** `flutter analyze` does not check Kotlin, so the `MainActivity.kt` change needs a real `flutter build apk` to compile-verify. The build was attempted but did not finish in the time available (slow/flaky network fetching Flutter engine artifacts). **None of these three fixes has been observed working on a real Android device.**
+
+---
+
+## 2026-08-25 — Linux↔Linux hotspot transfer + pause/resume
+
+**Status:** Done (pending commit)
+
+**Why:** Requested flow — one Linux machine hosts a hotspot and shows the password, the other joins it, and files transfer over that direct link with accept/reject and pause/resume. Mapping that against what existed: hotspot *hosting* and accept/reject were already built; hotspot *joining* and pause/resume were not.
+
+**What shipped:**
+- `HotspotManager.join()` / `.leave()` — the missing other half of `start()`. Uses `nmcli device wifi connect`, with a forced rescan first (a hotspot created seconds ago on another machine is usually absent from nmcli's cached scan list, which otherwise surfaces as a confusing "No network with SSID found").
+- `lib/screens/join_hotspot_screen.dart` — SSID/password entry (SSID prefilled to `LinkDrop`, the name `start()` always creates, so normally only the password is typed). On success shows the joined IP and jumps straight to Receive/Send. Linux-only entry point on the home screen, mirroring `HotspotEntryPoint`.
+- `FileSender.pause()` / `.resume()` / `.cancel()` + `onPausedChanged` callback — see Decision 017 for the in-session-only scope and why cross-reconnect resume was deliberately excluded.
+- Pause/Resume/Cancel controls wired into `send_screen.dart`, with an indeterminate progress bar and "Paused" label while halted. `dispose()` cancels any in-flight sender so a paused loop can't outlive its screen.
+
+**Verified (not just analyzed):**
+- `pause_resume_test.dart` — real 24 MB transfer over loopback: progress froze at exactly 21,102,592 bytes and did not move across a 2-second pause, then resumed to a **byte-identical SHA-256** on the received file.
+- `cancel_test.dart` — cancel issued *while paused* returns promptly instead of deadlocking the parked send loop, and the receiver leaves **no partial file** behind, reporting via `onRejected` rather than `onError` (Decision 014's split holds).
+- `flutter analyze` clean — no new issues.
+
+**Not verified:** the actual two-machine hotspot join. Needs a second Linux box; also can't be exercised on this dev machine because `nmcli device wifi hotspot` would repurpose the adapter and drop its real Wi-Fi connection.
+
+---
+
 ## 2026-08-24 — Android in-app cert generation
 
 **Status:** Done (pending commit)

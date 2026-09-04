@@ -4,25 +4,26 @@ import 'package:flutter/material.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
 import '../engine/hotspot_manager.dart';
-import 'receive_screen.dart';
-import 'send_screen.dart';
+import '../widgets/linkdrop_shell.dart';
+import '../widgets/linkdrop_widgets.dart';
+import 'wifi_direct_screen.dart';
 
 /// Lets a Linux device share a direct subnet with a phone — without
 /// both being on the same router Wi-Fi.
 ///
 /// Flow:
-///   1. Linux app taps "QR Hotspot" → this screen calls nmcli to create
-///      a hotspot named "LinkDrop" with a fresh random password.
+///   1. Linux app opens this screen → nmcli creates a hotspot named
+///      "LinkDrop" with a fresh random password.
 ///   2. A Wi-Fi QR code is shown on screen.
 ///   3. Android user points their camera at the QR (works on Android 10+
-///      — no third-party scanner needed, just the stock camera or
-///      Settings → Network → scan QR).
+///      — no third-party scanner needed).
 ///   4. Phone joins the hotspot. Both devices are now on the same subnet
 ///      (typically 10.42.0.x). Discovery, send, receive — everything
 ///      works normally from here.
 ///
-/// Android-side: no code needed. The phone is the joiner, not the host.
-/// This screen only runs on Linux.
+/// Hosting is a desktop capability: on Android the phone is the joiner, so
+/// this screen says so plainly rather than offering something that cannot
+/// work there.
 class HotspotScreen extends StatefulWidget {
   const HotspotScreen({super.key});
 
@@ -37,99 +38,123 @@ class _HotspotScreenState extends State<HotspotScreen> {
   String? _status;
   String? _error;
   bool _loading = true;
+  bool _disposed = false;
+
+  void _safeSetState(VoidCallback fn) {
+    if (_disposed || !mounted) return;
+    setState(fn);
+  }
 
   @override
   void initState() {
     super.initState();
     _manager = HotspotManager(
-      onStatus: (msg) {
-        if (!mounted) return;
-        setState(() => _status = msg);
-      },
-      onError: (msg) {
-        if (!mounted) return;
-        setState(() {
-          _error = msg;
-          _loading = false;
-        });
-      },
+      onStatus: (msg) => _safeSetState(() => _status = msg),
+      onError: (msg) => _safeSetState(() {
+        _error = msg;
+        _loading = false;
+      }),
     );
-    _start();
+    if (Platform.isLinux) _start();
   }
 
   Future<void> _start() async {
-    setState(() {
+    _safeSetState(() {
       _loading = true;
       _error = null;
       _info = null;
     });
 
     final info = await _manager.start();
+    if (_disposed || !mounted) return;
 
-    if (!mounted) return;
-    setState(() {
+    _safeSetState(() {
       _info = info;
       _loading = false;
       if (info == null && _error == null) {
-        _error = 'Could not create hotspot. Make sure nmcli is installed and you have permission to create a Wi-Fi hotspot.';
+        _error = 'Could not create hotspot. Make sure nmcli is installed '
+            'and you have permission to create a Wi-Fi hotspot.';
       }
     });
   }
 
   @override
   void dispose() {
+    _disposed = true;
     _manager.stop();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('QR Hotspot'),
-        actions: [
-          if (!_loading)
-            IconButton(
-              icon: const Icon(Icons.refresh),
-              tooltip: 'Restart hotspot with a new password',
-              onPressed: _start,
-            ),
-        ],
-      ),
-      body: Center(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.all(24),
-          child: _buildBody(context),
-        ),
-      ),
+    return LinkDropShell(
+      title: 'Host a hotspot',
+      content: _buildContent(context),
+      detail: Platform.isLinux && _info != null ? _buildQrHero(context) : null,
+      detailWidth: 420,
+      statusLine: _buildStatusLine(context),
+      actions: _buildActions(context),
     );
   }
 
-  Widget _buildBody(BuildContext context) {
+  Widget _buildContent(BuildContext context) {
+    final text = Theme.of(context).textTheme;
+    final scheme = Theme.of(context).colorScheme;
+
+    // Hosting belongs to the desktop build — say so instead of failing.
+    if (!Platform.isLinux) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(Icons.smartphone_outlined,
+              size: 34, color: scheme.onSurfaceVariant),
+          const SizedBox(height: 18),
+          Text('Hotspot hosting is a desktop screen',
+              style: text.headlineMedium?.copyWith(fontSize: 22)),
+          const SizedBox(height: 8),
+          Text(
+            'This mode belongs to the Linux build. On Android the phone '
+            'joins a hotspot through the system Wi-Fi sheet, or uses '
+            'Wi-Fi Direct.',
+            style: text.bodyMedium?.copyWith(color: scheme.onSurfaceVariant),
+          ),
+          const SizedBox(height: 22),
+          OutlinedButton.icon(
+            onPressed: () => Navigator.of(context).pushReplacement(
+              MaterialPageRoute(builder: (_) => const WifiDirectScreen()),
+            ),
+            icon: const Icon(Icons.wifi_tethering, size: 18),
+            label: const Text('Use Wi-Fi Direct'),
+          ),
+        ],
+      );
+    }
+
     if (_loading) {
       return Column(
-        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          const CircularProgressIndicator(),
-          const SizedBox(height: 16),
-          Text(_status ?? 'Starting hotspot...'),
+          const SizedBox(height: 8),
+          PulseEmptyState(
+            icon: Icons.qr_code_2,
+            title: 'Starting hotspot…',
+            subtitle: _status ?? 'Asking NetworkManager for a Wi-Fi hotspot.',
+          ),
         ],
       );
     }
 
     if (_error != null) {
       return Column(
-        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(Icons.error_outline,
-              size: 48, color: Theme.of(context).colorScheme.error),
-          const SizedBox(height: 16),
-          Text(_error!, textAlign: TextAlign.center),
-          const SizedBox(height: 24),
-          FilledButton.icon(
-            onPressed: _start,
-            icon: const Icon(Icons.refresh),
-            label: const Text('Try Again'),
+          Icon(Icons.error_outline, size: 38, color: scheme.error),
+          const SizedBox(height: 18),
+          Text('Could not host a hotspot', style: text.headlineMedium),
+          const SizedBox(height: 8),
+          Text(
+            _error!,
+            style: text.bodyMedium?.copyWith(color: scheme.onSurfaceVariant),
           ),
         ],
       );
@@ -137,142 +162,193 @@ class _HotspotScreenState extends State<HotspotScreen> {
 
     final info = _info!;
     return Column(
-      mainAxisSize: MainAxisSize.min,
-      crossAxisAlignment: CrossAxisAlignment.center,
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
+        Text('Host a hotspot', style: text.headlineMedium),
+        const SizedBox(height: 10),
         Text(
-          'Scan to join the hotspot',
-          style: Theme.of(context).textTheme.titleMedium,
+          'This laptop is broadcasting its own Wi-Fi. Scan the code with '
+          'the phone to join — no router, no internet needed.',
+          style: text.bodyMedium?.copyWith(color: scheme.onSurfaceVariant),
         ),
-        const SizedBox(height: 4),
-        Text(
-          'Point your phone\'s camera at the QR code.\nNo scanner app needed on Android 10+.',
-          textAlign: TextAlign.center,
-          style: Theme.of(context).textTheme.bodySmall,
-        ),
+        const SizedBox(height: 26),
+        const _Step(1, 'Open LinkDrop on the phone'),
+        const _Step(2, 'Tap Join hotspot and scan this code'),
+        const _Step(3, 'Send or receive as usual'),
         const SizedBox(height: 24),
-
-        // QR code
-        Container(
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(12),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withOpacity(0.08),
-                blurRadius: 8,
-                offset: const Offset(0, 2),
-              ),
-            ],
-          ),
-          padding: const EdgeInsets.all(16),
-          child: QrImageView(
-            data: info.wifiQrString,
-            version: QrVersions.auto,
-            size: 240,
-            backgroundColor: Colors.white,
-            errorStateBuilder: (context, error) => const SizedBox(
-              width: 240,
-              height: 240,
-              child: Center(child: Text('QR generation failed')),
-            ),
-          ),
-        ),
-
-        const SizedBox(height: 24),
-
-        // Credentials card — useful if camera QR doesn't work
-        Card(
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                _credRow(context, 'Network', info.ssid),
-                const SizedBox(height: 8),
-                _credRow(context, 'Password', info.password),
-                if (info.ipAddress != null) ...[
-                  const SizedBox(height: 8),
-                  _credRow(context, 'This device\'s IP', info.ipAddress!),
-                ],
-              ],
-            ),
-          ),
-        ),
-
-        const SizedBox(height: 16),
-
-        // Instruction text
-        Text(
-          'Once the phone has joined, open LinkDrop on the phone\nand use Send / Receive normally.',
-          textAlign: TextAlign.center,
-          style: Theme.of(context).textTheme.bodySmall,
-        ),
-
-        const SizedBox(height: 16),
-
-        // Quick actions for this device — once the phone has joined the
-        // hotspot, both devices are on a normal Wi-Fi subnet, so regular
-        // UDP broadcast discovery (DeviceListScreen) works unmodified.
-        // These just save backing out to Home to start a transfer.
-        Wrap(
-          alignment: WrapAlignment.center,
-          spacing: 12,
-          runSpacing: 8,
-          children: [
-            FilledButton.icon(
-              icon: const Icon(Icons.send),
-              label: const Text('Send Files'),
-              onPressed: () => Navigator.of(context).push(
-                MaterialPageRoute(builder: (_) => const SendScreen()),
-              ),
-            ),
-            FilledButton.icon(
-              icon: const Icon(Icons.download),
-              label: const Text('Receive Files'),
-              onPressed: () => Navigator.of(context).push(
-                MaterialPageRoute(builder: (_) => const ReceiveScreen()),
-              ),
-            ),
-          ],
-        ),
-
-        const SizedBox(height: 8),
-
-        // Status line
-        if (_status != null)
-          Text(
-            _status!,
-            style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                  color: Theme.of(context).colorScheme.outline,
-                ),
-            textAlign: TextAlign.center,
-          ),
+        _Credentials(info: info),
       ],
     );
   }
 
-  Widget _credRow(BuildContext context, String label, String value) {
+  /// The QR is the hero of this screen, and it sits on a deliberately light
+  /// panel: scanners want maximum contrast, and a dark-on-dark QR is
+  /// noticeably slower to acquire.
+  Widget _buildQrHero(BuildContext context) {
+    final info = _info!;
+    final text = Theme.of(context).textTheme;
+    final scheme = Theme.of(context).colorScheme;
+
+    return Center(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            padding: const EdgeInsets.all(18),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(14),
+            ),
+            child: QrImageView(
+              data: info.wifiQrString,
+              version: QrVersions.auto,
+              size: 240,
+              backgroundColor: Colors.white,
+              // Explicit dark-on-white regardless of app theme.
+              eyeStyle: const QrEyeStyle(
+                eyeShape: QrEyeShape.square,
+                color: Colors.black,
+              ),
+              dataModuleStyle: const QrDataModuleStyle(
+                dataModuleShape: QrDataModuleShape.square,
+                color: Colors.black,
+              ),
+            ),
+          ),
+          const SizedBox(height: 14),
+          Text(
+            '${info.ssid} · scan to join',
+            style: text.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget? _buildActions(BuildContext context) {
+    if (!Platform.isLinux || _loading) return null;
     return Row(
-      mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
-        Text(label,
-            style: Theme.of(context)
-                .textTheme
-                .bodySmall
-                ?.copyWith(color: Theme.of(context).colorScheme.outline)),
-        const SizedBox(width: 16),
-        SelectableText(
-          value,
-          style: const TextStyle(fontFamily: 'monospace', fontSize: 13),
+        OutlinedButton.icon(
+          onPressed: _start,
+          icon: const Icon(Icons.refresh, size: 18),
+          label: Text(_error == null ? 'New password' : 'Try again'),
         ),
       ],
+    );
+  }
+
+  Widget? _buildStatusLine(BuildContext context) {
+    if (!Platform.isLinux) return null;
+    final info = _info;
+    if (info == null) return null;
+    return StatusLine(
+      message: info.ipAddress == null
+          ? 'Hotspot up — waiting for the phone to join'
+          : 'Hotspot up on ${info.ipAddress} — waiting for the phone to join',
     );
   }
 }
 
-/// A button/tile for the home screen that only shows on Linux.
-/// On other platforms, returns [SizedBox.shrink()].
+/// A numbered instruction, accent circle plus text.
+class _Step extends StatelessWidget {
+  const _Step(this.number, this.label);
+
+  final int number;
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Row(
+        children: [
+          Container(
+            width: 22,
+            height: 22,
+            decoration: BoxDecoration(
+              color: scheme.primaryContainer,
+              shape: BoxShape.circle,
+            ),
+            alignment: Alignment.center,
+            child: Text(
+              '$number',
+              style: TextStyle(fontSize: 11, color: scheme.primary),
+            ),
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Text(label, style: Theme.of(context).textTheme.bodyMedium),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// SSID / password / gateway, in monospace so they can be typed accurately
+/// by anyone whose camera will not scan the code.
+class _Credentials extends StatelessWidget {
+  const _Credentials({required this.info});
+
+  final HotspotInfo info;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: scheme.surfaceContainer,
+        borderRadius: BorderRadius.circular(8),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const SectionLabel('Credentials'),
+          const SizedBox(height: 12),
+          _Row(label: 'SSID', value: info.ssid),
+          _Row(label: 'Password', value: info.password),
+          if (info.ipAddress != null)
+            _Row(label: 'Gateway', value: info.ipAddress!),
+        ],
+      ),
+    );
+  }
+}
+
+class _Row extends StatelessWidget {
+  const _Row({required this.label, required this.value});
+
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Row(
+        children: [
+          Text(
+            label,
+            style: TextStyle(fontSize: 13, color: scheme.onSurfaceVariant),
+          ),
+          const Spacer(),
+          SelectableText(
+            value,
+            style: const TextStyle(fontFamily: 'monospace', fontSize: 13),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// Home-screen entry point, kept for callers that still use it.
+/// Renders nothing off Linux.
 class HotspotEntryPoint extends StatelessWidget {
   const HotspotEntryPoint({super.key});
 
@@ -284,8 +360,8 @@ class HotspotEntryPoint extends StatelessWidget {
       onPressed: () => Navigator.of(context).push(
         MaterialPageRoute(builder: (_) => const HotspotScreen()),
       ),
-      icon: const Icon(Icons.qr_code),
-      label: const Text('QR Hotspot (Linux → Phone)'),
+      icon: const Icon(Icons.qr_code_2),
+      label: const Text('Host hotspot · QR'),
     );
   }
 }

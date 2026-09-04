@@ -1,10 +1,22 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Required for ALL socket use (discovery, cert exchange, TLS transfer).
+         Flutter only declares this in the debug/ and profile/ manifests, so
+         without it here a *release* build has no network access at all: the
+         cert fetch on port 7980 fails and surfaces to the user as
+         "Could not get <device>'s certificate", which looks like a
+         certificate bug but is really a missing permission. -->
+    <uses-permission android:name="android.permission.INTERNET"/>
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE"/>
     <uses-permission android:name="android.permission.CHANGE_WIFI_STATE"/>
     <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE"/>
     <uses-permission android:name="android.permission.NEARBY_WIFI_DEVICES" android:usesPermissionFlags="neverForLocation"/>
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
+    <!-- Publishing received files to the gallery needs no permission on
+         API 29+ (scoped storage: the app owns what it inserts into
+         MediaStore). Only the pre-Q direct-write path does. -->
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="28"/>
     <application
         android:label="linkdrop_app"
         android:name="${applicationName}"

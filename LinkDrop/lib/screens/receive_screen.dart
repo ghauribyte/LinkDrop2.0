@@ -4,16 +4,38 @@ import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
 
 import '../engine/cert_manager.dart';
+import '../engine/device_identity.dart';
 import '../engine/discovery_broadcaster.dart';
 import '../engine/file_receiver.dart';
+import '../engine/media_export.dart';
 import '../models/manifest_entry.dart';
 import '../models/transfer_progress.dart';
+import '../theme/linkdrop_theme.dart';
+import '../widgets/consent_surface.dart';
+import '../widgets/linkdrop_shell.dart';
+import '../widgets/linkdrop_widgets.dart';
+import '../widgets/transfer_progress_view.dart';
+
+/// One line in the session's Recent list. A decline is recorded alongside
+/// completions rather than hidden — it is a normal outcome, not a failure.
+class _RecentEntry {
+  _RecentEntry({required this.label, required this.time, this.declined = false});
+
+  final String label;
+  final DateTime time;
+  final bool declined;
+
+  String get clock =>
+      '${time.hour.toString().padLeft(2, '0')}:'
+      '${time.minute.toString().padLeft(2, '0')}';
+}
+
+enum _ReceiveState { idle, receiving, complete, declined, failed }
 
 /// Runs the receiving side of LinkDrop as a real device:
-/// - Broadcasts this device's presence (closes the gap where
-///   receiver.dart never broadcast on its own — see TASK_BOARD.md)
+/// - Broadcasts this device's presence
 /// - Listens for incoming files via FileReceiver
-/// - Shows an accept/reject popup before any file is written to disk
+/// - Shows an accept/reject surface before any file is written to disk
 /// - Shows live progress once a transfer is accepted
 ///
 /// Cert/key at <app documents dir>/linkdrop/cert.pem and key.pem are
@@ -30,10 +52,31 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
   DiscoveryBroadcaster? _broadcaster;
   FileReceiver? _receiver;
 
+  /// Where FileReceiver stages incoming files, kept so completed ones can be
+  /// located and published to the gallery. See [_publishToGallery].
+  Directory? _receivedDir;
+
+  _ReceiveState _state = _ReceiveState.idle;
   String? _statusMessage;
   String? _errorMessage;
   TransferProgress? _progress;
-  String? _currentFilename;
+  DeviceIdentity? _identity;
+
+  /// The manifest of the batch being received, so the weighted batch bar can
+  /// size its segments. Cleared when the batch ends.
+  List<ManifestEntry> _incoming = [];
+  final List<_RecentEntry> _recents = [];
+
+  /// Set at the top of [dispose] so engine callbacks stop touching state.
+  /// `mounted` alone is not enough: it is still true for the duration of
+  /// dispose(), and DiscoveryBroadcaster.stop() fires onStatus synchronously
+  /// from inside it.
+  bool _disposed = false;
+
+  void _safeSetState(VoidCallback fn) {
+    if (_disposed || !mounted) return;
+    setState(fn);
+  }
 
   @override
   void initState() {
@@ -50,114 +93,137 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
     try {
       await CertManager.ensureCertExists(certPath: certPath, keyPath: keyPath);
     } catch (e) {
-      if (!mounted) return;
-      setState(() {
+      _safeSetState(() {
+        _state = _ReceiveState.failed;
         _errorMessage = 'Could not generate certificate: $e';
       });
       return;
     }
 
+    final identity = await DeviceIdentity.resolve(certPath: certPath);
+    _safeSetState(() => _identity = identity);
+
+    _receivedDir = Directory('${linkdropDir.path}/received');
+
     _broadcaster = DiscoveryBroadcaster(
       deviceName: Platform.localHostname,
-      onStatus: (msg) {
-        if (!mounted) return;
-        setState(() => _statusMessage = msg);
-      },
-      onError: (e) {
-        if (!mounted) return;
-        setState(() => _errorMessage = 'Broadcast error: $e');
-      },
+      onStatus: (msg) => _safeSetState(() => _statusMessage = msg),
+      onError: (e) =>
+          _safeSetState(() => _errorMessage = 'Broadcast error: $e'),
     );
 
     _receiver = FileReceiver(
-      targetDir: Directory('${linkdropDir.path}/received'),
+      targetDir: _receivedDir!,
       certPath: certPath,
       keyPath: keyPath,
-      onStatus: (msg) {
-        if (!mounted) return;
-        setState(() => _statusMessage = msg);
-      },
-      onIncomingRequest: (files, senderIp) =>
-          _showAcceptRejectDialog(files, senderIp),
-      onProgress: (p) {
-        if (!mounted) return;
-        setState(() {
-          _progress = p;
-          _currentFilename = p.filename;
-        });
-      },
+      onStatus: (msg) => _safeSetState(() => _statusMessage = msg),
+      onIncomingRequest: _handleIncomingRequest,
+      onProgress: (p) => _safeSetState(() {
+        _state = _ReceiveState.receiving;
+        _progress = p;
+      }),
       onComplete: (filename) {
-        if (!mounted) return;
-        setState(() => _statusMessage = 'Received: $filename');
-      },
-      onBatchComplete: (count) {
-        if (!mounted) return;
-        setState(() {
-          _statusMessage = count == 1
-              ? 'Transfer complete.'
-              : 'Transfer complete ($count files).';
-          _progress = null;
-          _currentFilename = null;
+        _safeSetState(() {
+          _recents.insert(
+            0,
+            _RecentEntry(label: filename, time: DateTime.now()),
+          );
         });
+        _publishToGallery(filename);
       },
-      onError: (msg) {
-        if (!mounted) return;
-        setState(() => _statusMessage = msg);
-      },
-      onRejected: (msg) {
-        if (!mounted) return;
-        setState(() => _statusMessage = msg);
-      },
+      onBatchComplete: (count) => _safeSetState(() {
+        _state = _ReceiveState.complete;
+        _statusMessage = count == 1
+            ? 'Transfer complete.'
+            : 'Transfer complete ($count files).';
+        _progress = null;
+        _incoming = [];
+      }),
+      // onError is a genuine failure; onRejected is an expected outcome.
+      // They must not collapse into the same visual state.
+      onError: (msg) => _safeSetState(() {
+        _state = _ReceiveState.failed;
+        _errorMessage = msg;
+        _progress = null;
+      }),
+      onRejected: (msg) => _safeSetState(() {
+        _state = _ReceiveState.declined;
+        _statusMessage = msg;
+        _progress = null;
+        _incoming = [];
+      }),
     );
 
     await _broadcaster!.start();
     await _receiver!.start();
   }
 
-  /// Shows the accept/reject popup for the whole incoming batch. The
-  /// returned Future resolves when the user taps a button — FileReceiver
-  /// awaits this before writing any bytes to disk (see onIncomingRequest
-  /// in file_receiver.dart). One decision covers every file in the batch.
-  Future<bool> _showAcceptRejectDialog(
+  Future<bool> _handleIncomingRequest(
     List<ManifestEntry> files,
     String senderIp,
   ) async {
-    if (!mounted) return false;
+    if (_disposed || !mounted) return false;
 
-    final totalBytes = files.fold<int>(0, (sum, f) => sum + f.size);
-    final totalMB = (totalBytes / (1024 * 1024)).toStringAsFixed(2);
+    _safeSetState(() => _incoming = files);
 
-    final title = files.length == 1 ? 'Incoming File' : 'Incoming Files';
-    final fileList = files.length <= 5
-        ? files.map((f) => f.name).join('\n')
-        : '${files.take(5).map((f) => f.name).join('\n')}\n...and ${files.length - 5} more';
-
-    final result = await showDialog<bool>(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) => AlertDialog(
-        title: Text(title),
-        content: Text(
-          '$fileList\n\n${files.length} file(s), $totalMB MB total\nfrom $senderIp',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('Reject'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('Accept'),
-          ),
-        ],
-      ),
+    final accepted = await showIncomingRequest(
+      context,
+      files: files,
+      senderIp: senderIp,
+      destination: _receivedDir?.path ?? 'this device',
+      fingerprint: _identity?.shortFingerprint,
+      senderIsPhone: !Platform.isAndroid,
     );
 
-    return result ?? false; // dialog dismissed some other way = reject
+    if (!accepted) {
+      _safeSetState(() {
+        _state = _ReceiveState.declined;
+        _incoming = [];
+        _recents.insert(
+          0,
+          _RecentEntry(
+            label: 'declined from $senderIp',
+            time: DateTime.now(),
+            declined: true,
+          ),
+        );
+      });
+    }
+    return accepted;
+  }
+
+  /// Moves a completed file out of app-private storage into the system media
+  /// collections, so received photos actually appear in the gallery. Runs per
+  /// file from onComplete — only whole files get published.
+  ///
+  /// The staging copy is removed once the export succeeds, making this a move
+  /// rather than a duplicate. If the export fails the file is left where it
+  /// is, so a gallery problem never costs the user the transfer.
+  ///
+  /// No-op on Linux, where the received folder is already user-visible.
+  Future<void> _publishToGallery(String filename) async {
+    final dir = _receivedDir;
+    if (dir == null || !MediaExport.isSupported) return;
+
+    final staged = File('${dir.path}/$filename');
+    final uri = await MediaExport.export(
+      path: staged.path,
+      filename: filename,
+      onError: (msg) => _safeSetState(() => _statusMessage = msg),
+    );
+    if (uri == null) return;
+
+    try {
+      await staged.delete();
+    } catch (_) {
+      // Nothing actionable — the published copy is the one that counts.
+    }
+    _safeSetState(() => _statusMessage = 'Saved to gallery: $filename');
   }
 
   @override
   void dispose() {
+    _disposed = true;
     _broadcaster?.stop();
     _receiver?.stop();
     super.dispose();
@@ -165,67 +231,249 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('Receive Files')),
-      body: Center(
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: _buildBody(context),
+    return LinkDropShell(
+      title: 'Receive',
+      // Waiting is a single centred subject; a live or finished transfer is a
+      // list of files and reads from the top.
+      centerContent: _state == _ReceiveState.idle,
+      content: _buildContent(context),
+      detail: _buildDetail(context),
+      statusLine: _buildStatusLine(context),
+    );
+  }
+
+  Widget _buildContent(BuildContext context) {
+    final text = Theme.of(context).textTheme;
+    final scheme = Theme.of(context).colorScheme;
+    final identity = _identity;
+
+    switch (_state) {
+      case _ReceiveState.receiving:
+        final progress = _progress;
+        if (progress == null) break;
+
+        final total = _incoming.fold<int>(0, (sum, f) => sum + f.size);
+        final currentIndex = progress.fileIndex - 1;
+        var done = 0;
+        for (var i = 0; i < currentIndex && i < _incoming.length; i++) {
+          done += _incoming[i].size;
+        }
+        done += progress.bytesDone;
+
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            TransferHeadline(
+              percent: total == 0 ? progress.fraction : done / total,
+              currentName: progress.filename,
+              fileIndex: progress.fileIndex,
+              fileCount: progress.fileCount,
+              doneLabel: formatBytes(done),
+              totalLabel:
+                  formatBytes(total == 0 ? progress.totalBytes : total),
+              stateWord: 'Receiving',
+            ),
+            const SizedBox(height: 18),
+            BatchProgressBar(
+              files: [
+                for (var i = 0; i < _incoming.length; i++)
+                  BatchFile(
+                    name: _incoming[i].name,
+                    bytes: _incoming[i].size,
+                    progress: i < currentIndex
+                        ? 1.0
+                        : i == currentIndex
+                            ? progress.fraction
+                            : 0.0,
+                  ),
+              ],
+            ),
+          ],
+        );
+
+      case _ReceiveState.complete:
+        return _outcome(
+          context,
+          icon: Icons.check_circle_outline,
+          color: context.transferColors.success,
+          title: 'Transfer complete',
+          detail: _statusMessage ?? 'All files received.',
+        );
+
+      case _ReceiveState.declined:
+        return _outcome(
+          context,
+          icon: Icons.remove_circle_outline,
+          color: context.transferColors.declined,
+          title: 'Transfer declined',
+          detail: _statusMessage ??
+              'Nothing was written to disk. Still listening.',
+        );
+
+      case _ReceiveState.failed:
+        return _outcome(
+          context,
+          icon: Icons.error_outline,
+          color: scheme.error,
+          title: 'Something went wrong',
+          detail: _errorMessage ?? 'The transfer could not complete.',
+        );
+
+      case _ReceiveState.idle:
+        break;
+    }
+
+    final address = identity?.ipAddress;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const SizedBox(height: 8),
+        PulseEmptyState(
+          icon: Icons.download_outlined,
+          title: 'Waiting for incoming files',
+          subtitle: address == null
+              ? 'You will be asked before anything is written to disk.'
+              : 'This machine is listening on $address. You will be asked '
+                  'before anything is written to disk.',
         ),
+        if (identity?.shortFingerprint != null) ...[
+          const SizedBox(height: 24),
+          const SectionLabel('This device'),
+          const SizedBox(height: 8),
+          FingerprintText(
+            identity!.shortFingerprint!,
+            note: 'compare on the sender',
+          ),
+        ],
+        const SizedBox(height: 4),
+        Text(
+          '',
+          style: text.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
+        ),
+      ],
+    );
+  }
+
+  Widget _outcome(
+    BuildContext context, {
+    required IconData icon,
+    required Color color,
+    required String title,
+    required String detail,
+  }) {
+    final text = Theme.of(context).textTheme;
+    final scheme = Theme.of(context).colorScheme;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(icon, size: 40, color: color),
+        const SizedBox(height: 18),
+        Text(title, style: text.headlineMedium),
+        const SizedBox(height: 8),
+        Text(detail,
+            style: text.bodyMedium?.copyWith(color: scheme.onSurfaceVariant)),
+      ],
+    );
+  }
+
+  /// Save location and this session's recents — real content for the second
+  /// pane, so the desktop layout has something true to say.
+  Widget? _buildDetail(BuildContext context) {
+    if (MediaQuery.sizeOf(context).width < Bp.phone) return null;
+
+    final scheme = Theme.of(context).colorScheme;
+    final text = Theme.of(context).textTheme;
+
+    return SingleChildScrollView(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const SectionLabel('Save location'),
+          const SizedBox(height: 10),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: scheme.surfaceContainer,
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Row(
+              children: [
+                Icon(Icons.folder_outlined,
+                    size: 17, color: scheme.onSurfaceVariant),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    _receivedDir?.path ?? '…',
+                    maxLines: 2,
+                    style: text.bodySmall?.copyWith(fontSize: 12),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 24),
+          const SectionLabel('Recent'),
+          const SizedBox(height: 6),
+          if (_recents.isEmpty)
+            Text(
+              'Nothing received yet this session.',
+              style: text.bodySmall?.copyWith(color: scheme.onSurfaceVariant),
+            )
+          else
+            for (final entry in _recents.take(8))
+              Container(
+                padding: const EdgeInsets.symmetric(vertical: 10),
+                decoration: BoxDecoration(
+                  border: Border(
+                    bottom:
+                        BorderSide(color: scheme.outlineVariant, width: 1),
+                  ),
+                ),
+                child: Row(
+                  children: [
+                    Icon(
+                      entry.declined
+                          ? Icons.remove_circle_outline
+                          : Icons.insert_drive_file_outlined,
+                      size: 16,
+                      color: entry.declined
+                          ? context.transferColors.declined
+                          : scheme.onSurfaceVariant,
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        entry.label,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: text.bodySmall?.copyWith(fontSize: 13),
+                      ),
+                    ),
+                    Text(
+                      entry.clock,
+                      style: text.bodySmall
+                          ?.copyWith(color: scheme.onSurfaceVariant),
+                    ),
+                  ],
+                ),
+              ),
+        ],
       ),
     );
   }
 
-  Widget _buildBody(BuildContext context) {
-    if (_errorMessage != null) {
-      return Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(Icons.error_outline,
-              size: 48, color: Theme.of(context).colorScheme.error),
-          const SizedBox(height: 16),
-          Text(_errorMessage!, textAlign: TextAlign.center),
-        ],
+  Widget? _buildStatusLine(BuildContext context) {
+    final address = _identity?.ipAddress;
+    if (_state == _ReceiveState.failed) {
+      return StatusLine(
+        message: _errorMessage ?? 'Receiver stopped',
+        live: false,
+        color: Theme.of(context).colorScheme.error,
       );
     }
-
-    if (_progress != null) {
-      final p = _progress!;
-      return Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Text('Receiving $_currentFilename'),
-          if (p.isBatch) ...[
-            const SizedBox(height: 4),
-            Text(
-              'File ${p.batchLabel}',
-              style: Theme.of(context).textTheme.bodySmall,
-            ),
-          ],
-          const SizedBox(height: 16),
-          LinearProgressIndicator(value: p.fraction),
-          const SizedBox(height: 8),
-          Text('${p.doneMB} MB / ${p.totalMB} MB'),
-        ],
-      );
-    }
-
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Icon(Icons.wifi_tethering,
-            size: 48, color: Theme.of(context).colorScheme.primary),
-        const SizedBox(height: 16),
-        const Text('Waiting for incoming files...'),
-        if (_statusMessage != null) ...[
-          const SizedBox(height: 8),
-          Text(
-            _statusMessage!,
-            style: Theme.of(context).textTheme.bodySmall,
-            textAlign: TextAlign.center,
-          ),
-        ],
-      ],
-    );
+    if (address == null) return null;
+    return StatusLine(message: 'Listening on $address');
   }
 }

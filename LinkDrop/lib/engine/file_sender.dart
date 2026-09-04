@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 import 'dart:convert';
@@ -37,6 +38,10 @@ class FileSender {
   /// failure, fingerprint mismatch, or connection error.
   final void Function(String message)? onError;
 
+  /// Called whenever the paused state flips, so a GUI can swap its
+  /// pause/resume button without tracking the state itself.
+  final void Function(bool isPaused)? onPausedChanged;
+
   FileSender({
     required this.receiverIp,
     required this.filePaths,
@@ -46,7 +51,71 @@ class FileSender {
     this.onProgress,
     this.onComplete,
     this.onError,
+    this.onPausedChanged,
   });
+
+  // ---- pause / resume / cancel ----
+  //
+  // Pause works purely by stopping the feed into the socket: the socket
+  // and the whole batch stay open, and the receiver's read simply blocks
+  // waiting for bytes that aren't coming yet. Nothing about the wire
+  // protocol changes, and no partial file is ever left behind, so the
+  // receiver invariants in Decision 014 still hold untouched.
+  //
+  // Note this is *in-session* pause only — it survives an arbitrarily
+  // long pause but not a dropped connection. Resuming across a
+  // reconnect would need offset negotiation in the protocol AND would
+  // directly conflict with the receiver's "delete partials on early
+  // disconnect" rule, so it's deliberately not attempted here.
+
+  bool _paused = false;
+  bool _cancelled = false;
+  Completer<void>? _resumeSignal;
+
+  bool get isPaused => _paused;
+  bool get isCancelled => _cancelled;
+
+  /// Halts the byte feed at the next chunk boundary. Safe to call when
+  /// already paused or when no transfer is running (both are no-ops).
+  void pause() {
+    if (_paused || _cancelled) return;
+    _paused = true;
+    _resumeSignal = Completer<void>();
+    onStatus?.call('Transfer paused.');
+    onPausedChanged?.call(true);
+  }
+
+  /// Continues a paused transfer from exactly where it stopped.
+  void resume() {
+    if (!_paused) return;
+    _paused = false;
+    // Guard against double-complete if resume() races cancel().
+    if (_resumeSignal != null && !_resumeSignal!.isCompleted) {
+      _resumeSignal!.complete();
+    }
+    _resumeSignal = null;
+    onStatus?.call('Transfer resumed.');
+    onPausedChanged?.call(false);
+  }
+
+  /// Aborts the transfer. If currently paused, this also releases the
+  /// paused send loop so it can observe the cancellation and unwind
+  /// rather than hanging forever.
+  void cancel() {
+    if (_cancelled) return;
+    _cancelled = true;
+    if (_paused) resume();
+  }
+
+  /// Blocks the send loop while paused. Returns as soon as the transfer
+  /// is resumed or cancelled.
+  Future<void> _waitWhilePaused() async {
+    while (_paused && !_cancelled) {
+      final signal = _resumeSignal;
+      if (signal == null) break;
+      await signal.future;
+    }
+  }
 
   /// Convenience constructor for the common single-file case — same
   /// call shape as the old FileSender(filePath: ...) had, so existing
@@ -167,6 +236,16 @@ class FileSender {
       // Step 2 — send each file in order, same per-file format as the
       // original single-file protocol (length-prefixed header + bytes).
       for (var i = 0; i < files.length; i++) {
+        // Also honour a pause/cancel between files, not just mid-file —
+        // otherwise pausing during a batch would still push the next
+        // file's header out before actually stopping.
+        await _waitWhilePaused();
+        if (_cancelled) {
+          onStatus?.call('Transfer cancelled.');
+          socket.destroy();
+          return false;
+        }
+
         final file = files[i];
         final entry = manifestEntries[i];
 
@@ -177,6 +256,15 @@ class FileSender {
         try {
           final fileStream = file.openRead();
           await for (final chunk in fileStream) {
+            // Gate before writing, so a pause takes effect at a clean
+            // chunk boundary and never splits a chunk across the pause.
+            await _waitWhilePaused();
+            if (_cancelled) {
+              onStatus?.call('Transfer cancelled.');
+              socket.destroy();
+              return false;
+            }
+
             socket.add(chunk);
             bytesSent += chunk.length;
             onProgress?.call(TransferProgress(
@@ -186,6 +274,12 @@ class FileSender {
               fileIndex: i + 1,
               fileCount: files.length,
             ));
+
+            // Let the socket drain before queueing more. Without this,
+            // a fast disk feeding a slow link buffers the whole file in
+            // memory, and a "pause" would only stop the disk read while
+            // megabytes of already-buffered data kept flowing out.
+            await socket.flush();
           }
         } catch (e) {
           onError?.call('Failed reading "${entry.name}" (file ${i + 1} of ${files.length}): $e');

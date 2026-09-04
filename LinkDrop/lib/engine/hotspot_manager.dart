@@ -89,6 +89,74 @@ class HotspotManager {
     onStatus?.call('Hotspot stopped.');
   }
 
+  /// Joins a hotspot hosted by another device — the other half of
+  /// [start], for Linux-to-Linux transfers where the receiving machine
+  /// has no camera to scan the QR code with and must type the SSID and
+  /// password instead.
+  ///
+  /// Returns this device's IP on the joined subnet (typically 10.42.0.x
+  /// when the host created the hotspot with nmcli), or null on failure.
+  Future<String?> join({
+    required String ssid,
+    required String password,
+  }) async {
+    if (!isSupported) return null;
+
+    if (ssid.trim().isEmpty) {
+      onError?.call('Network name (SSID) is required.');
+      return null;
+    }
+
+    onStatus?.call('Joining "$ssid"...');
+
+    // Rescan first — a hotspot created seconds ago on another machine
+    // often isn't in nmcli's cached scan list yet, which surfaces as a
+    // confusing "No network with SSID ... found" error.
+    await Process.run('nmcli', ['device', 'wifi', 'rescan']);
+    await Future.delayed(const Duration(seconds: 2));
+
+    final result = await Process.run('nmcli', [
+      'device', 'wifi', 'connect', ssid,
+      'password', password,
+    ]);
+
+    if (result.exitCode != 0) {
+      final err = (result.stderr as String).trim();
+      onError?.call('Could not join "$ssid": $err');
+      return null;
+    }
+
+    final ip = await _getJoinedIp(ssid);
+    onStatus?.call(ip == null
+        ? 'Joined "$ssid".'
+        : 'Joined "$ssid" — this device is $ip.');
+    return ip;
+  }
+
+  /// Disconnects from a joined hotspot, leaving the saved profile in
+  /// place so nmcli can reconnect without re-entering the password.
+  Future<void> leave(String ssid) async {
+    if (!isSupported) return;
+    await Process.run('nmcli', ['connection', 'down', ssid]);
+    onStatus?.call('Left "$ssid".');
+  }
+
+  /// Reads this device's IP on the network it just joined.
+  Future<String?> _getJoinedIp(String ssid) async {
+    for (var i = 0; i < 10; i++) {
+      await Future.delayed(const Duration(milliseconds: 500));
+      final result = await Process.run('nmcli', [
+        '-g', 'IP4.ADDRESS',
+        'connection', 'show', ssid,
+      ]);
+      final out = (result.stdout as String).trim();
+      if (out.isNotEmpty) {
+        return out.split('/').first;
+      }
+    }
+    return null;
+  }
+
   /// Returns this device's IP on the hotspot subnet (typically
   /// 10.42.0.1 when nmcli creates the hotspot). Polls the nmcli
   /// connection details — may take a second or two to appear.
