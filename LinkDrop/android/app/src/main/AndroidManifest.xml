@@ -17,6 +17,12 @@
          MediaStore). Only the pre-Q direct-write path does. -->
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
         android:maxSdkVersion="28"/>
+    <!-- A transfer runs as a plain background socket, not a foreground
+         service. Without a wake lock, a screen timeout mid-transfer can let
+         the OS suspend the app's network, which the peer sees as the
+         connection being reset. Held only for the duration of an active
+         send/receive (transfer_wake_lock.dart), not for the app's lifetime. -->
+    <uses-permission android:name="android.permission.WAKE_LOCK"/>
     <application
         android:label="linkdrop_app"
         android:name="${applicationName}"

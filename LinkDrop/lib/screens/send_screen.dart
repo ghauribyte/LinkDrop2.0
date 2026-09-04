@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import '../engine/cert_exchange.dart';
 import '../engine/file_sender.dart';
 import '../engine/throughput_meter.dart';
+import '../engine/transfer_wake_lock.dart';
 import '../models/device.dart';
 import '../models/transfer_progress.dart';
 import '../theme/linkdrop_theme.dart';
@@ -69,6 +70,10 @@ class _SendScreenState extends State<SendScreen> {
   /// Measures throughput for the rate and ETA readout. Owned by the screen
   /// rather than the sender so the engine keeps reporting raw byte counts.
   final _meter = ThroughputMeter();
+
+  /// Keeps Android awake for the duration of an in-flight send — see
+  /// transfer_wake_lock.dart for why a plain background socket needs this.
+  final _wakeLock = TransferWakeLock();
 
   void _safeSetState(VoidCallback fn) {
     if (_disposed || !mounted) return;
@@ -157,6 +162,9 @@ class _SendScreenState extends State<SendScreen> {
     await tempCertFile.writeAsString(certPem);
 
     _safeSetState(() => _state = _SendState.sending);
+    // From here bytes are moving — same window a screen timeout on this
+    // device (if it's a phone doing the sending) must not interrupt.
+    await _wakeLock.acquire();
 
     final sender = FileSender(
       receiverIp: device.ipAddress,
@@ -172,8 +180,12 @@ class _SendScreenState extends State<SendScreen> {
         _isPaused = paused;
         paused ? _meter.pause() : _meter.resume();
       }),
-      onComplete: () => _safeSetState(() => _state = _SendState.done),
+      onComplete: () => _safeSetState(() {
+        _state = _SendState.done;
+        _wakeLock.release();
+      }),
       onError: (msg) => _safeSetState(() {
+        _wakeLock.release();
         // A cancel we initiated already moved us to `cancelled`; don't let a
         // trailing socket error relabel it as a failure.
         if (_state == _SendState.cancelled) return;
@@ -209,6 +221,9 @@ class _SendScreenState extends State<SendScreen> {
 
   void _cancelTransfer() {
     _sender?.cancel();
+    // FileSender.cancel() only fires onStatus, not onError/onComplete, so
+    // this is the one path where the lock has to be released explicitly.
+    _wakeLock.release();
     _safeSetState(() {
       _state = _SendState.cancelled;
       _isPaused = false;
@@ -221,6 +236,7 @@ class _SendScreenState extends State<SendScreen> {
     // Don't leave a paused send loop parked on a socket after the screen
     // is gone — cancel() releases it so it can unwind and close.
     _sender?.cancel();
+    _wakeLock.release();
     super.dispose();
   }
 

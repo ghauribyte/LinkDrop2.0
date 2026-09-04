@@ -10,6 +10,7 @@ import '../engine/discovery_broadcaster.dart';
 import '../engine/file_receiver.dart';
 import '../engine/media_export.dart';
 import '../engine/throughput_meter.dart';
+import '../engine/transfer_wake_lock.dart';
 import '../models/manifest_entry.dart';
 import '../models/transfer_progress.dart';
 import '../theme/linkdrop_theme.dart';
@@ -77,6 +78,10 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
 
   /// Measures throughput for the rate and ETA readout.
   final _meter = ThroughputMeter();
+
+  /// Keeps Android awake for the duration of an accepted transfer — see
+  /// transfer_wake_lock.dart for why a plain background socket needs this.
+  final _wakeLock = TransferWakeLock();
 
   void _safeSetState(VoidCallback fn) {
     if (_disposed || !mounted) return;
@@ -173,6 +178,7 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
         _progress = null;
         _incoming = [];
         _meter.reset();
+        _wakeLock.release();
       }),
       // onError is a genuine failure; onRejected is an expected outcome.
       // They must not collapse into the same visual state.
@@ -181,6 +187,7 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
         _errorMessage = msg;
         _progress = null;
         _meter.reset();
+        _wakeLock.release();
       }),
       onRejected: (msg) => _safeSetState(() {
         _state = _ReceiveState.declined;
@@ -188,6 +195,7 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
         _progress = null;
         _incoming = [];
         _meter.reset();
+        _wakeLock.release();
       }),
     );
 
@@ -211,6 +219,10 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
       fingerprint: _identity?.shortFingerprint,
       senderIsPhone: !Platform.isAndroid,
     );
+
+    // From here until onBatchComplete/onError, bytes are moving — this is
+    // exactly the window a screen timeout must not interrupt.
+    if (accepted) await _wakeLock.acquire();
 
     if (!accepted) {
       _safeSetState(() {
@@ -301,6 +313,7 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
     _disposed = true;
     _broadcaster?.stop();
     _receiver?.stop();
+    _wakeLock.release();
     super.dispose();
   }
 

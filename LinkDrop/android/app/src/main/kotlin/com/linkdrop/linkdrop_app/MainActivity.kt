@@ -16,6 +16,7 @@ import android.net.wifi.p2p.WifiP2pInfo
 import android.net.wifi.p2p.WifiP2pManager
 import android.os.Build
 import android.os.Environment
+import android.os.PowerManager
 import android.provider.MediaStore
 import android.webkit.MimeTypeMap
 import io.flutter.embedding.android.FlutterActivity
@@ -28,6 +29,7 @@ import java.io.FileInputStream
 private const val METHOD_CHANNEL = "linkdrop/wifi_direct"
 private const val EVENT_CHANNEL = "linkdrop/wifi_direct_events"
 private const val MEDIA_CHANNEL = "linkdrop/media_store"
+private const val WAKE_LOCK_CHANNEL = "linkdrop/wake_lock"
 
 class MainActivity : FlutterActivity() {
     private var manager: WifiP2pManager? = null
@@ -35,6 +37,7 @@ class MainActivity : FlutterActivity() {
     private var receiver: BroadcastReceiver? = null
     private var eventSink: EventChannel.EventSink? = null
     private var multicastLock: WifiManager.MulticastLock? = null
+    private var transferWakeLock: PowerManager.WakeLock? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -65,6 +68,21 @@ class MainActivity : FlutterActivity() {
                         call.argument("filename"),
                         result
                     )
+                    else -> result.notImplemented()
+                }
+            }
+
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, WAKE_LOCK_CHANNEL)
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "acquire" -> {
+                        acquireTransferWakeLock()
+                        result.success(true)
+                    }
+                    "release" -> {
+                        releaseTransferWakeLock()
+                        result.success(true)
+                    }
                     else -> result.notImplemented()
                 }
             }
@@ -373,9 +391,50 @@ class MainActivity : FlutterActivity() {
         multicastLock = null
     }
 
+    /**
+     * A transfer runs as a plain background socket rather than a foreground
+     * service. Without this, a screen timeout partway through a send or
+     * receive can let the OS suspend the app's network — the peer sees that
+     * as the connection being reset, not as anything LinkDrop did wrong.
+     *
+     * PARTIAL_WAKE_LOCK keeps the CPU (and the socket) running without
+     * forcing the screen on, so it costs battery only for the duration of
+     * an actual transfer, not the display. Reference-counted off, matching
+     * MulticastLock, since Dart is the single caller managing the on/off
+     * transitions — a double acquire here would otherwise need a matching
+     * double release to actually let go.
+     */
+    private fun acquireTransferWakeLock() {
+        if (transferWakeLock?.isHeld == true) return
+        try {
+            val power = applicationContext.getSystemService(Context.POWER_SERVICE) as? PowerManager
+            transferWakeLock = power
+                ?.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "linkdrop:transfer")
+                ?.apply {
+                    setReferenceCounted(false)
+                    acquire(10 * 60 * 1000L /* 10 minutes */)
+                }
+        } catch (e: Exception) {
+            // Non-fatal: the transfer proceeds without the protection: a
+            // screen timeout may still interrupt it, same as before this
+            // existed.
+            transferWakeLock = null
+        }
+    }
+
+    private fun releaseTransferWakeLock() {
+        try {
+            transferWakeLock?.let { if (it.isHeld) it.release() }
+        } catch (e: Exception) {
+            // Ignore — nothing useful to do if the release itself fails.
+        }
+        transferWakeLock = null
+    }
+
     override fun onDestroy() {
         unregisterReceiver()
         releaseMulticastLock()
+        releaseTransferWakeLock()
         super.onDestroy()
     }
 }
