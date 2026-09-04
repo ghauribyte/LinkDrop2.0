@@ -15,7 +15,7 @@ class HotspotInfo {
 
   /// Standard Wi-Fi QR code string — scannable by Android camera app
   /// (Settings → scan, or just point camera at it on Android 10+).
-  /// Format: WIFI:T:WPA;S:<ssid>;P:<password>;;
+  /// Format: `WIFI:T:WPA;S:<ssid>;P:<password>;;`
   String get wifiQrString => 'WIFI:T:WPA;S:${_escape(ssid)};P:${_escape(password)};;';
 
   /// Escapes special chars in WIFI QR strings per the spec.

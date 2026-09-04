@@ -125,10 +125,14 @@ ThemeData buildTheme(ColorScheme scheme, TransferColors transfer) {
     useMaterial3: true,
     colorScheme: scheme,
     scaffoldBackgroundColor: scheme.surface,
-    // NOTE: Inter is not bundled yet — no font assets exist in pubspec.yaml,
-    // so this currently falls back to the platform default. Add the family to
-    // pubspec.yaml to get the intended type.
-    fontFamily: 'Inter',
+    // The design specifies Inter. It is deliberately *not* declared here:
+    // naming a family with no matching asset does not fall back to Inter, it
+    // silently falls back to the platform default while the code claims
+    // otherwise. Bundling it means adding the .ttf files under assets/fonts/
+    // and a `fonts:` block to pubspec.yaml; until then the platform default
+    // is what actually renders, and this stays honest about that.
+    //
+    // Inter is metrically close enough to Roboto that the layouts hold.
     textTheme: _textTheme,
 
     // Primary action = accent outline, never a fill (§03). 44dp minimum keeps

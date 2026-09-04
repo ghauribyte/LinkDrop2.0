@@ -99,17 +99,40 @@ Target platforms are **Linux and Android only** (Decision 014 — iOS/Windows/ma
 - **Android** — `wifi_direct_channel.dart` bridges to native Kotlin `WifiP2pManager` in `MainActivity.kt` over `MethodChannel('linkdrop/wifi_direct')` and `EventChannel('linkdrop/wifi_direct_events')`. Group owner is typically `192.168.49.1`.
 - **Linux** — `hotspot_manager.dart` shells out to `nmcli` to host a "LinkDrop" hotspot and renders a Wi-Fi QR string for the phone to scan.
 
-Neither is wired into `FileSender`/`FileReceiver` yet — they establish connectivity only. Screens for both are gated by platform (`HotspotEntryPoint` renders only on Linux; `WifiDirectChannel` no-ops off Android).
+Neither is wired into `FileSender`/`FileReceiver` yet — they establish connectivity only. Screens for both are gated by platform (`HotspotEntryPoint` renders only on Linux; `WifiDirectChannel` no-ops off Android), and the navigation rail hides destinations that don't exist on the running platform rather than disabling them (`railDestinations()` in `lib/navigation/rail_scope.dart`).
+
+### Android gallery export
+
+Received files are staged in app-private storage, which no gallery can see. `media_export.dart` bridges to `MethodChannel('linkdrop/media_store')` and moves each completed file into the system media collections — scoped storage on API 29+, legacy insert below that. A successful export deletes the staged copy, so anything still in `received/` is by definition unpublished; `ReceiveScreen` sweeps that backlog on startup. No-op on Linux, where the folder is already user-visible.
+
+## UI layer
+
+`lib/theme/`, `lib/widgets/`, and `lib/navigation/` hold the design system (Decision 018). Two rules matter when editing screens:
+
+- **Everything sits in `LinkDropShell`** — icon rail, work pane, optional context pane. The context pane must carry real content *for that screen*; if a screen has nothing legitimate to put there, pass `null` and let the content take the width. Never centre a narrow column in an empty window, which is the problem the shell exists to remove.
+- **`centerContent` is set from state, not per screen.** A waiting or empty state is one centred subject; the moment a list, a queue, or a live transfer exists it must anchor to the top and read downward.
+
+### Verifying layout
+
+Layout bugs are invisible in source. `test/ui_golden_test.dart` renders screens at the two canvases the design was drawn on (1280dp Linux, 412dp Android):
+
+```bash
+flutter test test/ui_golden_test.dart --update-goldens   # PNGs land in test/goldens/
+```
+
+**Look at the PNGs — regenerating without reviewing them defeats the point.** They verify layout, not typography: Inter is not bundled, so glyphs render as boxes and text widths mean nothing. `HotspotScreen` must be rendered with `autoStart: false`; otherwise its `initState` shells out to `nmcli` and a screenshot reconfigures the host's Wi-Fi.
 
 ## Known blocker
 
-**Android cannot receive files.** There is no in-app cert generation, and the manual openssl workflow doesn't exist on mobile. Sending from Android works. See `docs/TASK_BOARD.md` → Pending Review.
+None currently blocking. **Android can now both send and receive** — in-app cert generation (Decision 015) removed the old openssl-on-mobile blocker, and received files are published to the system gallery via `media_export.dart`. See `docs/TASK_BOARD.md` for current work.
+
+Unverified rather than broken: transfer-in-progress and outcome states have no goldens, and no end-to-end phone↔laptop transfer has been run since the UI rebuild.
 
 ## Documentation conventions
 
 This project keeps a deliberate paper trail; treat it as part of the work, not an afterthought:
 
-- `docs/DECISIONS.md` — every architectural choice as Decision NNN with Date / Topic / Decision / **Reason** / **Consequences**. Add a new numbered entry rather than editing history; supersede by noting it in the new entry. (Note: two entries are both numbered 014 — check dates when citing one.)
+- `docs/DECISIONS.md` — every architectural choice as Decision NNN with Date / Topic / Decision / **Reason** / **Consequences**. Add a new numbered entry rather than editing history; supersede by noting it in the new entry. (Note: two entries are both numbered 014 — check dates when citing one. Also: `wifi_direct_channel.dart` cites "Decision 015" for the Wi-Fi Direct platform channel, but 015 is in-app cert generation — that citation is wrong and the Wi-Fi Direct channel has no decision entry of its own.)
 - `docs/PROJECT_LOG.md` — dated session summaries, including what failed and why.
 - `docs/TASK_BOARD.md` — Pending Review / Next Up.
 - `docs/ROADMAP.md` — phase status. `docs/ARCHITECTURE.md` predates the Linux+Android narrowing and still describes the all-platform/mDNS design; `DECISIONS.md` is the current source of truth where they conflict.

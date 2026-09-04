@@ -108,7 +108,7 @@ Decision: Linux and Android only. iOS, Windows, macOS deferred.
 Reason: Faster iteration, avoid iOS socket restrictions.
 Consequences: Decision 007 partially superseded.
 
-# Decision 015
+## Decision 015
 Date: 2026-06-23
 Topic: Cert generation on Android
 Decision: Generate self-signed cert in-app using Dart (basic_utils package)
@@ -116,6 +116,7 @@ instead of requiring openssl CLI.
 Reason: Android has no openssl. Users can't run terminal commands.
 Consequences: Adds basic_utils dependency. Cert generated once on
 first launch, stored in app documents dir.
+
 ## Decision 016
 Date: 2026-08-24
 Topic: Planned future platform: Windows
@@ -131,6 +132,13 @@ Reason: In-session pause covers the actual user-facing need ("stop this transfer
 Consequences: A pause survives arbitrarily long but not a connection drop — if the link dies while paused, the transfer restarts from zero and the receiver cleans up its partial file as usual. Pausing holds the receiver's FIFO transfer slot (Decision 010) for the duration, so a long pause blocks other queued senders; the 5-minute queue timeout applies to *waiting* senders, not to the in-flight paused one. Very long pauses may also hit TCP keepalive/NAT idle timeouts on some networks. If cross-reconnect resume is wanted later, it needs a new decision that revisits the Decision 014 partial-file rule.
 
 Also added in the same change: FileSender.cancel(), because pause without a way to abort leaves a transfer parked on an open socket with no exit. Cancel releases a paused send loop so it can unwind; the receiver sees a normal early disconnect and reports it via onRejected (not onError), matching Decision 014's error/rejection split.
+
+## Decision 018
+Date: 2026-09-04
+Topic: UI design system, and rendering screens as goldens to verify layout
+Decision: Replaced the single-line `ColorScheme.fromSeed` theme with an explicit design system (lib/theme/linkdrop_theme.dart) and rebuilt every screen on a shared LinkDropShell — icon rail, work pane, and a context pane that must carry real content for that screen or be omitted. Layout is verified by rendering screens to PNG under test/goldens/ rather than by reading code. Throughput is now measured (lib/engine/throughput_meter.dart) so the design's rate/ETA readout shows real numbers.
+Reason: The previous build centred a min-height column in whatever window it was given, which is what made the desktop look mostly empty — the complaint was structural, not cosmetic, so a palette swap would not have fixed it. Goldens exist because layout bugs are invisible in source: rendering the screens immediately exposed three that code review had missed — every idle state hugging the top-left of a full-height pane, PulseEmptyState left-aligning its ring/headline/subtitle onto three different edges, and the shell pinning action buttons to the pane bottom in contradiction of its own documented contract, stranding a form's submit button far below the last field. A fourth, a reachable null-check crash in HotspotScreen, surfaced the moment that screen could be rendered at all. ThroughputMeter lives in lib/engine/ under Decision 008: it holds no widgets and reports nothing outward, so the same measurement backs the CLI harness and the GUI.
+Consequences: Layout changes must be re-goldened (`flutter test test/ui_golden_test.dart --update-goldens`) and the PNGs reviewed, not just accepted. Goldens verify layout, not typography — the test environment has no Inter, so glyphs render as boxes. Inter is deliberately NOT declared in the theme: naming a family with no bundled asset silently falls back to the platform default while the code claims otherwise, so it stays undeclared until the .ttf files are added. Rate and ETA are withheld rather than estimated until the meter has a large enough sample, and while paused; a stalled transfer shows nothing instead of a countdown that keeps ticking. HotspotScreen gained an `autoStart` flag purely so it can be rendered without nmcli reconfiguring the developer's Wi-Fi as a side effect of a screenshot — it is always true in the app.
 
 ## Pending Decisions (need to be made before coding starts)
 _(none — all core decisions made, ready to continue through the phases)_

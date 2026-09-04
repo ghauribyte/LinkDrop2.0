@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 
 import '../engine/cert_exchange.dart';
 import '../engine/file_sender.dart';
+import '../engine/throughput_meter.dart';
 import '../models/device.dart';
 import '../models/transfer_progress.dart';
 import '../theme/linkdrop_theme.dart';
@@ -64,6 +65,10 @@ class _SendScreenState extends State<SendScreen> {
   FileSender? _sender;
   bool _isPaused = false;
   bool _disposed = false;
+
+  /// Measures throughput for the rate and ETA readout. Owned by the screen
+  /// rather than the sender so the engine keeps reporting raw byte counts.
+  final _meter = ThroughputMeter();
 
   void _safeSetState(VoidCallback fn) {
     if (_disposed || !mounted) return;
@@ -157,8 +162,16 @@ class _SendScreenState extends State<SendScreen> {
       receiverIp: device.ipAddress,
       filePaths: _filePaths,
       receiverCertPath: tempCertFile.path,
-      onProgress: (p) => _safeSetState(() => _progress = p),
-      onPausedChanged: (paused) => _safeSetState(() => _isPaused = paused),
+      onProgress: (p) => _safeSetState(() {
+        _progress = p;
+        // Feed the batch total, not the per-file count, so the rate stays
+        // continuous across file boundaries instead of resetting at each one.
+        _meter.update(_batchBytesDone);
+      }),
+      onPausedChanged: (paused) => _safeSetState(() {
+        _isPaused = paused;
+        paused ? _meter.pause() : _meter.resume();
+      }),
       onComplete: () => _safeSetState(() => _state = _SendState.done),
       onError: (msg) => _safeSetState(() {
         // A cancel we initiated already moved us to `cancelled`; don't let a
@@ -184,6 +197,7 @@ class _SendScreenState extends State<SendScreen> {
       _progress = null;
       _sender = null;
       _isPaused = false;
+      _meter.reset();
     });
   }
 
@@ -486,9 +500,11 @@ class _SendScreenState extends State<SendScreen> {
           totalLabel: formatBytes(total),
           stateWord: _isPaused ? 'Paused' : 'Sending',
           paused: _isPaused,
-          // Rate and ETA are intentionally absent: the engine does not
-          // measure throughput yet, and inventing a number here would be
-          // worse than omitting it.
+          // Both stay null until the meter has seen enough to be honest, and
+          // while paused, where a countdown would keep ticking against a
+          // transfer that is not moving.
+          rate: _isPaused ? null : _meter.rateLabel,
+          eta: _isPaused ? null : _meter.etaLabel(total - done),
         ),
         const SizedBox(height: 18),
         BatchProgressBar(files: _batchFiles),

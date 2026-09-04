@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -8,6 +9,7 @@ import '../engine/device_identity.dart';
 import '../engine/discovery_broadcaster.dart';
 import '../engine/file_receiver.dart';
 import '../engine/media_export.dart';
+import '../engine/throughput_meter.dart';
 import '../models/manifest_entry.dart';
 import '../models/transfer_progress.dart';
 import '../theme/linkdrop_theme.dart';
@@ -38,7 +40,7 @@ enum _ReceiveState { idle, receiving, complete, declined, failed }
 /// - Shows an accept/reject surface before any file is written to disk
 /// - Shows live progress once a transfer is accepted
 ///
-/// Cert/key at <app documents dir>/linkdrop/cert.pem and key.pem are
+/// Cert/key at `<app documents dir>/linkdrop/cert.pem` and `key.pem` are
 /// generated in-app on first launch via CertManager (Decision 015) —
 /// no openssl/shell step required, so this works on Android too.
 class ReceiveScreen extends StatefulWidget {
@@ -73,9 +75,23 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
   /// from inside it.
   bool _disposed = false;
 
+  /// Measures throughput for the rate and ETA readout.
+  final _meter = ThroughputMeter();
+
   void _safeSetState(VoidCallback fn) {
     if (_disposed || !mounted) return;
     setState(fn);
+  }
+
+  /// Bytes finished across the whole batch, not just the current file, so the
+  /// measured rate does not reset at every file boundary.
+  int _batchBytesDoneFor(TransferProgress p) {
+    final currentIndex = p.fileIndex - 1;
+    var done = 0;
+    for (var i = 0; i < currentIndex && i < _incoming.length; i++) {
+      done += _incoming[i].size;
+    }
+    return done + p.bytesDone;
   }
 
   @override
@@ -85,7 +101,21 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
   }
 
   Future<void> _setup() async {
-    final docsDir = await getApplicationDocumentsDirectory();
+    // path_provider is a platform channel, so it can fail — no implementation
+    // on the host, or a platform that refuses a documents directory. An
+    // unguarded await here took the screen down with an unhandled exception
+    // instead of showing why receiving could not start.
+    final Directory docsDir;
+    try {
+      docsDir = await getApplicationDocumentsDirectory();
+    } catch (e) {
+      _safeSetState(() {
+        _state = _ReceiveState.failed;
+        _errorMessage = 'Could not find a place to save files: $e';
+      });
+      return;
+    }
+
     final linkdropDir = Directory('${docsDir.path}/linkdrop');
     final certPath = '${linkdropDir.path}/cert.pem';
     final keyPath = '${linkdropDir.path}/key.pem';
@@ -105,6 +135,9 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
 
     _receivedDir = Directory('${linkdropDir.path}/received');
 
+    // Sweep up anything stranded by an earlier run before listening again.
+    unawaited(_publishBacklog());
+
     _broadcaster = DiscoveryBroadcaster(
       deviceName: Platform.localHostname,
       onStatus: (msg) => _safeSetState(() => _statusMessage = msg),
@@ -121,6 +154,7 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
       onProgress: (p) => _safeSetState(() {
         _state = _ReceiveState.receiving;
         _progress = p;
+        _meter.update(_batchBytesDoneFor(p));
       }),
       onComplete: (filename) {
         _safeSetState(() {
@@ -138,6 +172,7 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
             : 'Transfer complete ($count files).';
         _progress = null;
         _incoming = [];
+        _meter.reset();
       }),
       // onError is a genuine failure; onRejected is an expected outcome.
       // They must not collapse into the same visual state.
@@ -145,12 +180,14 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
         _state = _ReceiveState.failed;
         _errorMessage = msg;
         _progress = null;
+        _meter.reset();
       }),
       onRejected: (msg) => _safeSetState(() {
         _state = _ReceiveState.declined;
         _statusMessage = msg;
         _progress = null;
         _incoming = [];
+        _meter.reset();
       }),
     );
 
@@ -221,6 +258,44 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
     _safeSetState(() => _statusMessage = 'Saved to gallery: $filename');
   }
 
+  /// Publishes anything already sitting in the staging directory.
+  ///
+  /// Files that arrived before gallery export existed — or during a run where
+  /// the export failed — are stranded in app-private storage where nothing but
+  /// LinkDrop can see them. Since a successful export deletes the staged copy,
+  /// whatever is still here on startup is by definition unpublished, and this
+  /// sweep is safe to repeat.
+  ///
+  /// Failures stay silent: this is background tidying, not something the user
+  /// asked for, and it must not overwrite the status line of a live transfer.
+  Future<void> _publishBacklog() async {
+    final dir = _receivedDir;
+    if (dir == null || !MediaExport.isSupported) return;
+    if (!await dir.exists()) return;
+
+    final List<FileSystemEntity> stale;
+    try {
+      stale = await dir.list().toList();
+    } catch (_) {
+      return;
+    }
+
+    for (final entity in stale) {
+      if (_disposed) return;
+      if (entity is! File) continue;
+
+      final name = entity.path.split(Platform.pathSeparator).last;
+      final uri = await MediaExport.export(path: entity.path, filename: name);
+      if (uri == null) continue;
+
+      try {
+        await entity.delete();
+      } catch (_) {
+        // The published copy is the one that counts.
+      }
+    }
+  }
+
   @override
   void dispose() {
     _disposed = true;
@@ -272,6 +347,8 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
               totalLabel:
                   formatBytes(total == 0 ? progress.totalBytes : total),
               stateWord: 'Receiving',
+              rate: _meter.rateLabel,
+              eta: _meter.etaLabel(total - done),
             ),
             const SizedBox(height: 18),
             BatchProgressBar(

@@ -25,7 +25,15 @@ import 'wifi_direct_screen.dart';
 /// this screen says so plainly rather than offering something that cannot
 /// work there.
 class HotspotScreen extends StatefulWidget {
-  const HotspotScreen({super.key});
+  const HotspotScreen({super.key, this.autoStart = true});
+
+  /// Whether to bring the hotspot up as soon as the screen appears.
+  ///
+  /// Always true in the app — hosting is the entire point of opening this
+  /// screen. It exists so the layout can be rendered in a test without
+  /// `nmcli` reconfiguring the host's Wi-Fi as a side effect of taking a
+  /// screenshot.
+  final bool autoStart;
 
   @override
   State<HotspotScreen> createState() => _HotspotScreenState();
@@ -39,6 +47,10 @@ class _HotspotScreenState extends State<HotspotScreen> {
   String? _error;
   bool _loading = true;
   bool _disposed = false;
+
+  /// True once a hotspot has actually been brought up, so dispose only tears
+  /// down something that exists.
+  bool _started = false;
 
   void _safeSetState(VoidCallback fn) {
     if (_disposed || !mounted) return;
@@ -55,10 +67,15 @@ class _HotspotScreenState extends State<HotspotScreen> {
         _loading = false;
       }),
     );
-    if (Platform.isLinux) _start();
+    if (Platform.isLinux && widget.autoStart) {
+      _start();
+    } else if (!widget.autoStart) {
+      _loading = false;
+    }
   }
 
   Future<void> _start() async {
+    _started = true;
     _safeSetState(() {
       _loading = true;
       _error = null;
@@ -81,7 +98,10 @@ class _HotspotScreenState extends State<HotspotScreen> {
   @override
   void dispose() {
     _disposed = true;
-    _manager.stop();
+    // Only tear down what we brought up. stop() shells out to nmcli, so
+    // calling it unconditionally would touch the host's network even on a
+    // screen that never started a hotspot.
+    if (_started) _manager.stop();
     super.dispose();
   }
 
@@ -160,7 +180,34 @@ class _HotspotScreenState extends State<HotspotScreen> {
       );
     }
 
-    final info = _info!;
+    // Not loading, no error, and nothing to show: the hotspot has not been
+    // started. Previously this fell through to `_info!` and threw a null
+    // check — an unreachable state today, but a crash waiting for the first
+    // path that stops loading without recording an error.
+    final info = _info;
+    if (info == null) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(Icons.qr_code_2, size: 34, color: scheme.onSurfaceVariant),
+          const SizedBox(height: 18),
+          Text('Hotspot not started', style: text.headlineMedium),
+          const SizedBox(height: 8),
+          Text(
+            'This laptop can broadcast its own Wi-Fi so the phone can join '
+            'directly — no router needed.',
+            style: text.bodyMedium?.copyWith(color: scheme.onSurfaceVariant),
+          ),
+          const SizedBox(height: 22),
+          OutlinedButton.icon(
+            onPressed: _start,
+            icon: const Icon(Icons.wifi_tethering, size: 18),
+            label: const Text('Start hotspot'),
+          ),
+        ],
+      );
+    }
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [

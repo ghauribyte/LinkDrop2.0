@@ -7,6 +7,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:linkdrop/navigation/rail_scope.dart';
 import 'package:linkdrop/screens/device_list_screen.dart';
 import 'package:linkdrop/screens/home_screen.dart';
+import 'package:linkdrop/screens/hotspot_screen.dart';
 import 'package:linkdrop/screens/join_hotspot_screen.dart';
 import 'package:linkdrop/screens/receive_screen.dart';
 import 'package:linkdrop/screens/send_screen.dart';
@@ -23,10 +24,10 @@ import 'package:linkdrop/theme/linkdrop_theme.dart';
 /// so every glyph renders as a filled box. Ignore text shapes; look at
 /// alignment, spacing, and where boxes start and end.
 ///
-/// `HotspotScreen` is deliberately absent. Its initState calls
-/// `HotspotManager.start()`, which shells out to `nmcli` and creates a real
-/// hotspot on the host — rendering it in a test would reconfigure the
-/// developer's Wi-Fi. Check that screen by running the app.
+/// `HotspotScreen` is rendered with `autoStart: false`. Its initState
+/// otherwise calls `HotspotManager.start()`, which shells out to `nmcli` and
+/// creates a real hotspot on the host — a screenshot must never reconfigure
+/// the developer's Wi-Fi. Its live QR state still needs a run of the app.
 void main() {
   final binding = TestWidgetsFlutterBinding.ensureInitialized();
 
@@ -51,6 +52,7 @@ void main() {
     WidgetTester tester, {
     required Size size,
     required Widget child,
+    bool light = false,
   }) async {
     tester.view.physicalSize = size;
     tester.view.devicePixelRatio = 1.0;
@@ -62,7 +64,7 @@ void main() {
         currentIndex: 0,
         onSelect: (_) {},
         child: MaterialApp(
-          theme: linkDropDarkTheme,
+          theme: light ? linkDropLightTheme : linkDropDarkTheme,
           home: child,
         ),
       ),
@@ -94,6 +96,19 @@ void main() {
     await expectLater(
       find.byType(HomeScreen),
       matchesGoldenFile('goldens/home_phone.png'),
+    );
+  });
+
+  // The light scheme is a full peer in the spec, not a tint, but the app
+  // pins itself to dark — so without this it would ship having never been
+  // looked at. It also puts eyes on the one derived colour in the theme
+  // (light outlineVariant), which the spec only supplied for dark.
+  testWidgets('home · desktop · light', (tester) async {
+    await pumpAt(tester,
+        size: desktop, child: const HomeScreen(), light: true);
+    await expectLater(
+      find.byType(HomeScreen),
+      matchesGoldenFile('goldens/home_desktop_light.png'),
     );
   });
 
@@ -147,6 +162,18 @@ void main() {
       matchesGoldenFile('goldens/nearby_phone.png'),
     );
     await settleTimers(tester);
+  });
+
+  // Safe now that autoStart is injectable: this renders the screen's shell
+  // without nmcli touching the host's Wi-Fi. The live QR state still has to
+  // be checked by running the app, since the QR needs a real hotspot.
+  testWidgets('host hotspot · desktop', (tester) async {
+    await pumpAt(tester,
+        size: desktop, child: const HotspotScreen(autoStart: false));
+    await expectLater(
+      find.byType(HotspotScreen),
+      matchesGoldenFile('goldens/host_hotspot_desktop.png'),
+    );
   });
 
   testWidgets('join hotspot · desktop', (tester) async {
