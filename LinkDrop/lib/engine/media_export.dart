@@ -53,4 +53,31 @@ class MediaExport {
       return null;
     }
   }
+
+  /// Removes gallery entries a previous run left half-written, returning how
+  /// many were cleared.
+  ///
+  /// An export marks its row pending, copies the bytes, then clears the flag.
+  /// If the process is killed partway — backgrounded and reclaimed, force
+  /// stopped, battery cut — the row stays pending forever: hidden from the
+  /// gallery because pending rows are hidden by design, while still holding
+  /// whatever bytes were written. A single interrupted transfer of a large
+  /// file can strand more than a gigabyte the user cannot see or delete.
+  ///
+  /// Called on receive startup, alongside the staging-directory sweep. That
+  /// sweep cannot catch these: it looks at app-private storage, and these
+  /// files have already left it for MediaStore.
+  ///
+  /// Silent on failure — this is background tidying the user did not ask for,
+  /// and it must never look like a transfer problem.
+  static Future<int> clearPending() async {
+    if (!isSupported) return 0;
+    try {
+      return await _channel.invokeMethod<int>('clearPending') ?? 0;
+    } on PlatformException {
+      return 0;
+    } on MissingPluginException {
+      return 0;
+    }
+  }
 }

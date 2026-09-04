@@ -2,6 +2,7 @@ package com.linkdrop.linkdrop_app
 
 import android.Manifest
 import android.content.BroadcastReceiver
+import android.content.ContentUris
 import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
@@ -31,6 +32,15 @@ private const val EVENT_CHANNEL = "linkdrop/wifi_direct_events"
 private const val MEDIA_CHANNEL = "linkdrop/media_store"
 private const val WAKE_LOCK_CHANNEL = "linkdrop/wake_lock"
 private const val REVEAL_CHANNEL = "linkdrop/reveal"
+
+/**
+ * How old a pending gallery row must be before the cleanup sweep will delete
+ * it. Generous on purpose: a large file legitimately stays pending for as long
+ * as it takes to copy, and deleting a row that is still being written destroys
+ * a transfer that was going fine. Nothing is lost by leaving a stranded row
+ * for one more app launch.
+ */
+private const val PENDING_MIN_AGE_SECONDS = 10L * 60L
 
 class MainActivity : FlutterActivity() {
     private var manager: WifiP2pManager? = null
@@ -70,6 +80,7 @@ class MainActivity : FlutterActivity() {
                         call.argument("filename"),
                         result
                     )
+                    "clearPending" -> result.success(clearPendingExports())
                     else -> result.notImplemented()
                 }
             }
@@ -278,14 +289,97 @@ class MainActivity : FlutterActivity() {
     }
 
     /**
+     * Deletes MediaStore rows LinkDrop left marked pending, returning how many
+     * went away.
+     *
+     * A row is inserted with IS_PENDING=1 and cleared once the bytes are all
+     * copied, so the gallery never shows a half-written file. insertViaMediaStore
+     * already deletes the row if the copy throws — but nothing runs if the
+     * *process* dies mid-copy (killed while backgrounded, force-stopped, battery
+     * cut). The row then survives forever: invisible to the gallery because it is
+     * pending, and still holding the bytes already written. One interrupted
+     * transfer of a large file can strand more than a gigabyte this way.
+     *
+     * Scoped to LinkDrop's own folder by RELATIVE_PATH, so this can never touch
+     * another app's pending work even though the query would return it. Safe to
+     * repeat: a completed export is no longer pending and is never matched.
+     *
+     * Also skips anything added in the last [PENDING_MIN_AGE_SECONDS], because
+     * a row is legitimately pending for as long as its bytes are still being
+     * copied. Without that guard this races any export running concurrently —
+     * including a live transfer completing while the sweep runs — and deletes
+     * a file that was arriving perfectly well. A genuinely stranded row is
+     * from a previous run and always older than the cutoff.
+     */
+    private fun clearPendingExports(): Int {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return 0
+
+        val cutoff = (System.currentTimeMillis() / 1000) - PENDING_MIN_AGE_SECONDS
+
+        val collections = listOf(
+            MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+            MediaStore.Video.Media.EXTERNAL_CONTENT_URI,
+            MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
+            MediaStore.Downloads.EXTERNAL_CONTENT_URI,
+        )
+
+        var removed = 0
+        for (base in collections) {
+            try {
+                // Pending rows are hidden from ordinary queries by design.
+                val queryUri = MediaStore.setIncludePending(base)
+                contentResolver.query(
+                    queryUri,
+                    arrayOf(
+                        MediaStore.MediaColumns._ID,
+                        MediaStore.MediaColumns.RELATIVE_PATH,
+                        MediaStore.MediaColumns.DATE_ADDED,
+                    ),
+                    "${MediaStore.MediaColumns.IS_PENDING} = 1 AND " +
+                        "${MediaStore.MediaColumns.DATE_ADDED} < ?",
+                    arrayOf(cutoff.toString()),
+                    null,
+                )?.use { cursor ->
+                    val idColumn = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns._ID)
+                    val pathColumn =
+                        cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.RELATIVE_PATH)
+
+                    while (cursor.moveToNext()) {
+                        val path = cursor.getString(pathColumn) ?: continue
+                        if (!path.contains("LinkDrop")) continue
+
+                        val item = ContentUris.withAppendedId(base, cursor.getLong(idColumn))
+                        removed += try {
+                            contentResolver.delete(item, null, null)
+                        } catch (e: Exception) {
+                            // Another app owns it, or it vanished underneath us.
+                            0
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                // One unreadable collection must not stop the others.
+            }
+        }
+        return removed
+    }
+
+    /**
      * Where a given type belongs: images/video/audio go to the collections the
      * gallery actually scans, everything else to Downloads.
+     *
+     * Photos and videos go to DCIM rather than Pictures/Movies. All four are
+     * valid media locations and every one of them gets indexed, but galleries
+     * treat DCIM as the camera roll and surface it in the main timeline, while
+     * Pictures/ and Movies/ are typically filed away under "device folders"
+     * where the user has to go looking. A received photo should turn up where
+     * a taken photo does.
      */
     private fun collectionFor(mime: String): Pair<Uri, String> = when {
         mime.startsWith("image/") ->
-            MediaStore.Images.Media.EXTERNAL_CONTENT_URI to Environment.DIRECTORY_PICTURES
+            MediaStore.Images.Media.EXTERNAL_CONTENT_URI to Environment.DIRECTORY_DCIM
         mime.startsWith("video/") ->
-            MediaStore.Video.Media.EXTERNAL_CONTENT_URI to Environment.DIRECTORY_MOVIES
+            MediaStore.Video.Media.EXTERNAL_CONTENT_URI to Environment.DIRECTORY_DCIM
         mime.startsWith("audio/") ->
             MediaStore.Audio.Media.EXTERNAL_CONTENT_URI to Environment.DIRECTORY_MUSIC
         else ->

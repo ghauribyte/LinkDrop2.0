@@ -142,7 +142,17 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
     _receivedDir = Directory('${linkdropDir.path}/received');
 
     // Sweep up anything stranded by an earlier run before listening again.
-    unawaited(_publishBacklog());
+    //
+    // Strictly sequential, and that ordering is load-bearing: clearPending
+    // deletes gallery rows still marked pending, while _publishBacklog
+    // *creates* rows that are pending until their bytes finish copying.
+    // Run concurrently, the cleanup deletes the very files the backlog is
+    // exporting and they never reach the gallery.
+    unawaited(() async {
+      await MediaExport.clearPending();
+      if (_disposed) return;
+      await _publishBacklog();
+    }());
 
     _broadcaster = DiscoveryBroadcaster(
       deviceName: Platform.localHostname,
