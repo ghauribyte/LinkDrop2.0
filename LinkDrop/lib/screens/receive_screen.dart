@@ -357,6 +357,15 @@ class _ReceiveScreenState extends State<ReceiveScreen> {
       message: Platform.isAndroid
           ? 'Listening on $address — stays active if you switch screens'
           : 'Listening on $address',
+      // A profile on a Pixel 7 put ~32% of samples under drawFrame during an
+      // active receive, almost all of it StatusDot's unconditional 60fps
+      // AnimationController — UI painting and the transfer's socket
+      // callbacks share the same isolate's event loop, so a continuous
+      // animation is a direct competitor for turns on it, not free chrome.
+      // The blink communicates "listening"; once bytes are actually moving
+      // the progress bar already says that more directly, so the dot goes
+      // static rather than keep ticking through the whole transfer.
+      live: _service.state != ReceiveState.receiving,
     );
   }
 }
