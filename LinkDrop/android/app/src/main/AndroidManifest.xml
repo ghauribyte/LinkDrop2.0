@@ -17,12 +17,25 @@
          MediaStore). Only the pre-Q direct-write path does. -->
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
         android:maxSdkVersion="28"/>
-    <!-- A transfer runs as a plain background socket, not a foreground
-         service. Without a wake lock, a screen timeout mid-transfer can let
-         the OS suspend the app's network, which the peer sees as the
-         connection being reset. Held only for the duration of an active
-         send/receive (transfer_wake_lock.dart), not for the app's lifetime. -->
+    <!-- A transfer holds a CPU wake lock and a Wi-Fi lock for its duration.
+         Without them a screen timeout mid-transfer lets the OS suspend the
+         app's network, which the peer sees as the connection being reset.
+         Held only while a send/receive is active, never for the app's
+         lifetime — see TransferService. -->
     <uses-permission android:name="android.permission.WAKE_LOCK"/>
+
+    <!-- Locks held by an Activity do not protect the process: a backgrounded
+         app can still be frozen or killed, and a large file over a slow link
+         takes far longer than a user will sit watching the screen. A
+         foreground service is the only sanctioned way to keep a long transfer
+         running, and dataSync is its type — this is a file transfer the user
+         explicitly started, not background work. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC"/>
+    <!-- API 33+ only: without it the ongoing notification is silently hidden.
+         The service still runs, so a denial costs visibility, not the
+         transfer. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
     <application
         android:label="linkdrop_app"
         android:name="${applicationName}"
@@ -62,6 +75,14 @@
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/file_paths" />
         </provider>
+        <!-- Holds the CPU and Wi-Fi locks for the life of a transfer, so it
+             survives the app being backgrounded or the screen going off.
+             Not exported: nothing outside the app has any business starting
+             it. -->
+        <service
+            android:name=".TransferService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
         <meta-data

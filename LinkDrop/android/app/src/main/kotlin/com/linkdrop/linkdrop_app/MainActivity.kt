@@ -48,8 +48,8 @@ class MainActivity : FlutterActivity() {
     private var receiver: BroadcastReceiver? = null
     private var eventSink: EventChannel.EventSink? = null
     private var multicastLock: WifiManager.MulticastLock? = null
-    private var transferWakeLock: PowerManager.WakeLock? = null
-    private var transferWifiLock: WifiManager.WifiLock? = null
+    // The transfer's CPU and Wi-Fi locks live in TransferService now, so they
+    // outlast this Activity — see acquireTransferWakeLock.
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -562,68 +562,32 @@ class MainActivity : FlutterActivity() {
         }
     }
 
+    /**
+     * Hands the CPU and Wi-Fi locks to [TransferService] rather than holding
+     * them here.
+     *
+     * The Activity-held version had a ten-minute timeout on the wake lock,
+     * which expired part-way through any transfer slower than that and let
+     * the CPU sleep with the socket open. Worse, an Activity's locks say
+     * nothing about the *process*: backgrounding the app left it eligible to
+     * be frozen or killed no matter what was held. A foreground service is
+     * the only mechanism Android offers that actually keeps a long transfer
+     * alive once the user looks away.
+     *
+     * FLAG_KEEP_SCREEN_ON stays here because it is genuinely a window
+     * property — it only means anything while this activity is on screen,
+     * and the service covers the case where it is not.
+     */
     private fun acquireTransferWakeLock() {
-        try {
-            val power = applicationContext.getSystemService(Context.POWER_SERVICE) as? PowerManager
-            if (transferWakeLock?.isHeld != true) {
-                transferWakeLock = power
-                    ?.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "linkdrop:transfer")
-                    ?.apply {
-                        setReferenceCounted(false)
-                        acquire(10 * 60 * 1000L /* 10 minutes */)
-                    }
-            }
-        } catch (e: Exception) {
-            transferWakeLock = null
-        }
+        TransferService.start(applicationContext)
 
-        // A PARTIAL_WAKE_LOCK keeps the CPU running but says nothing about
-        // the Wi-Fi radio, which is why holding one alone still lost
-        // transfers when the screen went off: Android put Wi-Fi into power
-        // save and the socket died. A WifiLock is the part that keeps the
-        // radio fully awake.
-        try {
-            val wifi = applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
-            if (transferWifiLock?.isHeld != true) {
-                val mode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    WifiManager.WIFI_MODE_FULL_LOW_LATENCY
-                } else {
-                    @Suppress("DEPRECATION")
-                    WifiManager.WIFI_MODE_FULL_HIGH_PERF
-                }
-                transferWifiLock = wifi?.createWifiLock(mode, "linkdrop:transfer")?.apply {
-                    setReferenceCounted(false)
-                    acquire()
-                }
-            }
-        } catch (e: Exception) {
-            transferWifiLock = null
-        }
-
-        // Belt and braces for the case that actually bit: the user puts the
-        // phone down mid-transfer and the screen times out. Keeping the
-        // screen on for the duration removes the whole class of problem
-        // rather than racing the OS's power management, and it is honest
-        // about what is happening — the phone is visibly busy.
         runOnUiThread {
             window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         }
     }
 
     private fun releaseTransferWakeLock() {
-        try {
-            transferWakeLock?.let { if (it.isHeld) it.release() }
-        } catch (e: Exception) {
-            // Ignore — nothing useful to do if the release itself fails.
-        }
-        transferWakeLock = null
-
-        try {
-            transferWifiLock?.let { if (it.isHeld) it.release() }
-        } catch (e: Exception) {
-            // Ignore.
-        }
-        transferWifiLock = null
+        TransferService.stop(applicationContext)
 
         runOnUiThread {
             window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
