@@ -66,7 +66,11 @@ class _ReceivedFilesScreenState extends State<ReceivedFilesScreen> {
       return;
     }
 
-    final dir = Directory('${docsDir.path}/linkdrop');
+    // Must match ReceiverService._recordReceived, which writes the log
+    // beside the staged files at linkdrop/received/ — not linkdrop/ itself.
+    // Reading the wrong directory here meant this screen always found an
+    // empty log and showed no history, no matter how many files arrived.
+    final dir = Directory('${docsDir.path}/linkdrop/received');
     final entries = await ReceivedLog(directory: dir).load();
 
     _safeSetState(() {
@@ -222,7 +226,11 @@ class _ReceivedFilesScreenState extends State<ReceivedFilesScreen> {
                 Platform.isAndroid
                     ? 'Photos and video are published to the gallery under '
                         'LinkDrop; anything else goes to Downloads.'
-                    : '${_dir?.path ?? ''}/received',
+                    // _dir is already .../linkdrop/received — appending
+                    // "/received" again here was the same off-by-one-level
+                    // bug as _load(), just in the display string instead of
+                    // the read path.
+                    : _dir?.path ?? '',
                 style: text.bodySmall?.copyWith(
                   color: scheme.onSurfaceVariant,
                   fontFamily: Platform.isAndroid ? null : 'monospace',
