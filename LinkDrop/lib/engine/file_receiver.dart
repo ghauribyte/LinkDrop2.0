@@ -42,49 +42,75 @@ class _SocketReader {
     return jsonDecode(utf8.decode(jsonBytes)) as Map<String, dynamic>;
   }
 
+  /// How much is accumulated before handing anything to the file sink.
+  ///
+  /// Writes in dart:io are executed on a helper isolate and reached by port
+  /// message, so every `sink.add` costs a round trip through the microtask
+  /// queue regardless of how few bytes it carries. A CPU profile of a receive
+  /// on a Pixel 7 put 48% of samples under `_SendPort.send` and 58% under the
+  /// microtask loop, against ~2.6% in TLS — the path was bound by
+  /// message-passing overhead per network chunk, not by crypto or by disk
+  /// (that phone writes at 251 MB/s). Coalescing ~64 KB network chunks into
+  /// 1 MB writes cuts the number of those round trips by about sixteen.
+  static const _writeBlockBytes = 1024 * 1024;
+
   Future<bool> pipeExact(
     int n,
     IOSink sink,
-    void Function(int writtenSoFar) onChunk,
+    void Function(int receivedSoFar) onChunk,
   ) async {
     var remaining = n;
-    var written = 0;
+    var received = 0;
+
+    // copy: false keeps the incoming lists by reference; takeBytes()
+    // concatenates once, so a byte is copied at most once on its way to disk
+    // rather than once per add.
+    final pending = BytesBuilder(copy: false);
+
+    void stage(List<int> data) {
+      pending.add(data);
+      received += data.length;
+      remaining -= data.length;
+      if (pending.length >= _writeBlockBytes) {
+        sink.add(pending.takeBytes());
+      }
+      onChunk(received);
+    }
 
     if (_buffer.isNotEmpty) {
       final take = _buffer.length < remaining ? _buffer.length : remaining;
       final chunk = _buffer.sublist(0, take);
       _buffer = _buffer.sublist(take);
-      sink.add(chunk);
-      written += chunk.length;
-      remaining -= chunk.length;
-      onChunk(written);
+      stage(chunk);
     }
 
     while (remaining > 0) {
       final hasMore = await _iterator!.moveNext();
-      if (!hasMore) return false;
+      if (!hasMore) {
+        // Flush what was staged before reporting the short read, so the
+        // partial file on disk matches what actually arrived. The caller
+        // deletes it either way (Decision 014), but leaving bytes stranded in
+        // a buffer would make the file's length lie about the failure.
+        if (pending.isNotEmpty) sink.add(pending.takeBytes());
+        return false;
+      }
       final data = _iterator!.current;
 
-      // The common case by far is a chunk that fits entirely inside what
-      // is still expected. Handing the buffer straight to the sink avoids
-      // copying every byte of the file an extra time on the way to disk.
+      // The common case by far is a chunk that fits entirely inside what is
+      // still expected.
       if (data.length <= remaining) {
-        sink.add(data);
-        written += data.length;
-        remaining -= data.length;
-        onChunk(written);
+        stage(data);
         continue;
       }
 
-      // Only the final chunk of a file straddles the boundary into the
-      // next file's header, so the copy here happens once per file.
+      // Only the final chunk of a file straddles the boundary into the next
+      // file's header, so this split happens once per file.
       final take = remaining;
-      sink.add(data.sublist(0, take));
-      written += take;
-      remaining -= take;
-      onChunk(written);
+      stage(data.sublist(0, take));
       _buffer = data.sublist(take);
     }
+
+    if (pending.isNotEmpty) sink.add(pending.takeBytes());
     return true;
   }
 }

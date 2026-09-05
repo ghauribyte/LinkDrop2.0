@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 
 import '../engine/cert_exchange.dart';
 import '../engine/file_sender.dart';
+import '../engine/notification_permission.dart';
 import '../engine/throughput_meter.dart';
 import '../engine/transfer_wake_lock.dart';
 import '../models/device.dart';
@@ -135,6 +136,12 @@ class _SendScreenState extends State<SendScreen> {
       device = _device;
       if (device == null) return;
     }
+
+    // Before the transfer, not during it: sending also runs behind the
+    // foreground service, and on Android 13+ its notification is hidden
+    // unless this has been granted. A dialog on top of a progress bar is
+    // exactly what asking early avoids.
+    await NotificationPermission.ensureRequested();
 
     _safeSetState(() => _state = _SendState.fetchingCert);
     await _fetchCertAndSend(device);

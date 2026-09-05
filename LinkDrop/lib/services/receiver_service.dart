@@ -9,6 +9,7 @@ import '../engine/device_identity.dart';
 import '../engine/discovery_broadcaster.dart';
 import '../engine/file_receiver.dart';
 import '../engine/media_export.dart';
+import '../engine/notification_permission.dart';
 import '../engine/received_log.dart';
 import '../engine/throughput_meter.dart';
 import '../engine/transfer_wake_lock.dart';
@@ -98,6 +99,12 @@ class ReceiverService extends ChangeNotifier {
   }
 
   Future<void> _start() async {
+    // Asked here, before anything can arrive, because the alternative is a
+    // permission dialog appearing on top of a running transfer. Without it
+    // the foreground service's notification is silently suppressed on
+    // Android 13+, so a long transfer is protected but invisible.
+    await NotificationPermission.ensureRequested();
+
     // path_provider is a platform channel, so it can fail — no implementation
     // on the host, or a platform that refuses a documents directory.
     final Directory docsDir;
