@@ -210,11 +210,34 @@ class FileReceiver {
     return true;
   }
 
-  void _acceptLoop() async {
-    await for (final socket in _serverSocket!) {
-      onConnection?.call(socket.remoteAddress.address, socket.remotePort);
-      _queueAndHandle(socket);
-    }
+  /// Accepts connections until [stop] is called.
+  ///
+  /// Uses listen(cancelOnError: false) rather than `await for`, and that is
+  /// the whole point of it. This is a *TLS* server socket, so anything that
+  /// connects without completing a handshake — a port scanner, a browser
+  /// opened at the wrong address, a plain-TCP health check — surfaces as an
+  /// error on this stream, not as a socket. With `await for` that error
+  /// terminated the loop, and the receiver silently stopped accepting for the
+  /// rest of the app's life while the cert server on the neighbouring port
+  /// kept answering: the device still looked reachable and every subsequent
+  /// send failed with "connection refused". One stray packet was enough.
+  ///
+  /// A failed handshake is somebody else's problem, not a reason to stop
+  /// listening, so it is reported and swallowed.
+  void _acceptLoop() {
+    _serverSocket!.listen(
+      (socket) {
+        onConnection?.call(socket.remoteAddress.address, socket.remotePort);
+        _queueAndHandle(socket);
+      },
+      onError: (Object e) {
+        // Deliberately onError and not onRejected: nothing was refused and no
+        // transfer was in progress. Something failed to become a connection.
+        onError?.call('Ignored a connection that failed to start: $e');
+      },
+      cancelOnError: false,
+      onDone: () => _running = false,
+    );
   }
 
   Future<void> _queueAndHandle(SecureSocket socket) async {
