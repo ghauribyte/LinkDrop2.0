@@ -1,3 +1,7 @@
+// A CLI harness: stdout is its entire user interface, so avoid_print is
+// noise here rather than a finding. Kept file-local so `lib/` stays covered.
+// ignore_for_file: avoid_print
+
 import 'dart:io';
 import 'lib/engine/file_sender.dart';
 import 'lib/models/transfer_progress.dart';

@@ -4,6 +4,10 @@
 _(none)_
 
 ## Pending Review
+- [ ] **Release pipeline (Decision 019/020) — code complete, never run for real.** `.github/workflows/{checks,release}.yml`, Android release signing, and the About screen's update check all exist and are verified locally (see docs/PROJECT_LOG.md 2026-09-05 for exactly what was and wasn't proven). Three things can only be closed by spending real CI minutes and touching real hardware:
+  - No tag has ever been pushed, so neither workflow has executed on GitHub. Syntax and logic are checked; behaviour is not.
+  - The four `ANDROID_*` repository secrets do not exist yet, so the android job will fail on purpose until someone with repo admin adds them (`docs/RELEASING.md`).
+  - The update check has never seen a real `latest.json` on a real release — only a local stand-in.
 - [ ] **Android: 3 networking/cert bugs fixed, none hardware-verified** (see docs/TASK.md 2026-08-25):
   - INTERNET permission was missing from main/AndroidManifest.xml — release builds had zero network access; presented as "Could not get <device>'s certificate". **This is the reported cert issue.**
   - No MulticastLock — phone could send UDP discovery but often not receive it.

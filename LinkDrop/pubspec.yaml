@@ -1,6 +1,12 @@
 name: linkdrop
 description: AirDrop-style local Wi-Fi file transfer — CLI engine + Flutter GUI
-version: 0.1.0
+# The version that actually ships. The git tag only decides *when* a release
+# is built — release.yml refuses to publish if `v<version>` and this disagree.
+# Bump this, commit, then tag. See docs/RELEASING.md.
+#
+# The `+N` build number becomes Android's versionCode and must increase on
+# every release, or Android refuses the upgrade.
+version: 0.1.0+1
 publish_to: 'none'
 
 environment:
@@ -17,6 +23,10 @@ dependencies:
   qr_flutter: ^4.1.0
   basic_utils: ^5.8.2
   pointycastle: ^4.0.0
+  # Reads the *installed* package's version, which is what the update check
+  # has to compare against (Decision 020). A compiled-in constant would drift
+  # from what the user actually has.
+  package_info_plus: ^8.0.0
 
 dev_dependencies:
   flutter_test:

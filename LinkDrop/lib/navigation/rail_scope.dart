@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 
+import '../screens/about_screen.dart';
 import '../screens/device_list_screen.dart';
 import '../screens/home_screen.dart';
 import '../screens/hotspot_screen.dart';
@@ -72,6 +73,13 @@ List<RailDestination> railDestinations() {
         builder: (_) => const JoinHotspotScreen(),
       ),
     ],
+    // Last on both platforms: version and the update check are the thing you
+    // go looking for, not something you pass through.
+    RailDestination(
+      icon: Icons.info_outline,
+      label: 'About',
+      builder: (_) => const AboutScreen(),
+    ),
   ];
 }
 

@@ -6,9 +6,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 The git root is `/home/noor/Linkdrop`, but the Flutter project lives one level down in `LinkDrop/`. **All `flutter`/`dart` commands must be run from `LinkDrop/`, not the git root.**
 
-## Prerequisite: TLS certificate
+## Prerequisite: TLS certificate — CLI harness only
 
-Nothing that receives files will start without a cert/key pair. They are gitignored (`*.pem`), so a fresh clone must generate them:
+**The app does not need this.** `ReceiverService` calls `CertManager.ensureCertExists` on startup, which generates a self-signed pair in Dart on first launch (Decision 015) on both Linux and Android. A packaged build has no setup step.
+
+The CLI harness below takes cert/key paths as arguments and does not generate them, so a fresh clone needs a pair to use it. They are gitignored (`*.pem`):
 
 ```bash
 cd LinkDrop
@@ -27,8 +29,11 @@ flutter run -d linux              # Linux desktop
 flutter run -d <android-device>   # `flutter devices` to list
 flutter analyze                   # lint (flutter_lints via analysis_options.yaml)
 flutter test                      # all tests
+flutter test --exclude-tags golden                                         # what CI runs
 flutter test test/widget_test.dart --plain-name "substring of test name"   # single test
 ```
+
+`flutter analyze` exits non-zero on info-level lints too, so it must stay at zero issues — CI runs exactly these two commands (`.github/workflows/checks.yml`). The root-level CLI harness scripts carry a file-local `avoid_print` ignore rather than an analyzer exclude, so `lib/` keeps full coverage.
 
 ### CLI harness (primary debugging loop)
 
@@ -121,6 +126,17 @@ flutter test test/ui_golden_test.dart --update-goldens   # PNGs land in test/gol
 ```
 
 **Look at the PNGs — regenerating without reviewing them defeats the point.** They verify layout, not typography: Inter is not bundled, so glyphs render as boxes and text widths mean nothing. `HotspotScreen` must be rendered with `autoStart: false`; otherwise its `initState` shells out to `nmcli` and a screenshot reconfigures the host's Wi-Fi.
+
+The file is tagged `@Tags(['golden'])` and excluded from CI — golden pixels depend on the host's installed fonts, so they only mean anything on the machine that generated them.
+
+## Releasing (Decision 019)
+
+`docs/RELEASING.md` is the procedure; the two things to know before touching it:
+
+- **The version ships from `pubspec.yaml`, not the tag.** The tag only decides when a build runs. `release.yml`'s `version-guard` job fails in ~20s if they disagree. The `+N` build number is Android's `versionCode` and must increase every release.
+- **Updates are check-and-notify only.** `lib/engine/update_checker.dart` reads a `latest.json` asset off the newest GitHub Release and reports a version and a link. It never downloads or installs, and a check that *fails* is reported as a failure — never flattened into "you're up to date". Keep that distinction when editing it; it is the whole reason the feature can be trusted.
+
+Android release builds fall back to debug signing when no keystore is configured, so a fresh clone still builds. The release workflow asserts the shipped APK is not debug-signed rather than trusting the env vars arrived.
 
 ## Known blocker
 

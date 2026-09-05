@@ -1,3 +1,7 @@
+// A CLI harness: stdout is its entire user interface, so avoid_print is
+// noise here rather than a finding. Kept file-local so `lib/` stays covered.
+// ignore_for_file: avoid_print
+
 import 'dart:io';
 
 import 'lib/engine/cert_exchange.dart';
@@ -14,7 +18,7 @@ import 'lib/engine/file_sender.dart';
 /// the Receive screen tears the listener down, and a fixed sleep here would
 /// just move the race rather than remove it.
 ///
-///   dart bench_send.dart <receiver_ip> <file>
+///   `dart bench_send.dart <receiver_ip> <file>`
 void main(List<String> args) async {
   if (args.length < 2) {
     print('Usage: dart bench_send.dart <receiver_ip> <file>');

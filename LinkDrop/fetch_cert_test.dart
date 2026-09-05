@@ -1,8 +1,12 @@
+// A CLI harness: stdout is its entire user interface, so avoid_print is
+// noise here rather than a finding. Kept file-local so `lib/` stays covered.
+// ignore_for_file: avoid_print
+
 import 'dart:io';
 import 'lib/engine/cert_exchange.dart';
 
 /// Quick manual test for the cert exchange client.
-/// Usage: dart fetch_cert_test.dart <receiver_ip> [port]
+/// Usage: `dart fetch_cert_test.dart <receiver_ip> [port]`
 ///
 /// Run this against a receiver that's already running (receiver.dart),
 /// which now also starts a CertServer automatically. Confirms the

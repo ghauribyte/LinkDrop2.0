@@ -11,8 +11,10 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 
 import 'package:linkdrop/navigation/rail_scope.dart';
+import 'package:linkdrop/screens/about_screen.dart';
 import 'package:linkdrop/screens/device_list_screen.dart';
 import 'package:linkdrop/screens/home_screen.dart';
 import 'package:linkdrop/screens/hotspot_screen.dart';
@@ -237,6 +239,76 @@ void main() {
     await expectLater(
       find.byType(ReceivedFilesScreen),
       matchesGoldenFile('goldens/received_files_phone.png'),
+    );
+  });
+
+  // About reads the installed package's version, which has no plugin under
+  // `flutter test` — mocked so these capture the real idle state rather than
+  // the "could not read this build's version" error pane.
+  //
+  // The manifest URL is pointed at an address nothing is listening on. That
+  // matters: a golden must never make a network request to github.com as a
+  // side effect of being rendered.
+  const unreachable = 'http://127.0.0.1:1/latest.json';
+
+  void mockPackageInfo() {
+    PackageInfo.setMockInitialValues(
+      appName: 'LinkDrop',
+      packageName: 'com.linkdrop.linkdrop_app',
+      version: '0.1.0',
+      buildNumber: '1',
+      buildSignature: '',
+    );
+  }
+
+  testWidgets('about · desktop', (tester) async {
+    mockPackageInfo();
+    await pumpAt(
+      tester,
+      size: desktop,
+      child: const AboutScreen(manifestUrl: unreachable),
+    );
+    await settleAsyncLoad(tester);
+    await expectLater(
+      find.byType(AboutScreen),
+      matchesGoldenFile('goldens/about_desktop.png'),
+    );
+  });
+
+  testWidgets('about · phone', (tester) async {
+    mockPackageInfo();
+    await pumpAt(
+      tester,
+      size: phone,
+      child: const AboutScreen(manifestUrl: unreachable),
+    );
+    await settleAsyncLoad(tester);
+    await expectLater(
+      find.byType(AboutScreen),
+      matchesGoldenFile('goldens/about_phone.png'),
+    );
+  });
+
+  // The pane the shell rule is really about: idle is one centred subject,
+  // but the moment there is a result to read the content anchors to the top
+  // and the context pane carries it. A failed check is the state most worth
+  // looking at, since it must not resemble "up to date".
+  testWidgets('about · desktop · check failed', (tester) async {
+    mockPackageInfo();
+    await pumpAt(
+      tester,
+      size: desktop,
+      child: const AboutScreen(manifestUrl: unreachable),
+    );
+    await settleAsyncLoad(tester);
+
+    await tester.tap(find.text('Check for updates'));
+    await tester.pump();
+    await settleAsyncLoad(tester);
+
+    await expectLater(
+      find.byType(AboutScreen),
+      matchesGoldenFile('goldens/about_desktop_failed.png'),
     );
   });
 }

@@ -1,5 +1,9 @@
 // Throwaway harness: proves pause actually halts the byte flow and
 // resume finishes the transfer with a byte-identical result.
+//
+// stdout is its entire user interface, so avoid_print is noise here rather
+// than a finding. Kept file-local so `lib/` stays covered.
+// ignore_for_file: avoid_print
 import 'dart:io';
 import 'dart:math';
 import 'package:crypto/crypto.dart';

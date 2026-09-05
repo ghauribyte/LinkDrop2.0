@@ -19,7 +19,16 @@ received/
 .flutter-plugins-dependencies
 build/
 .packages
-pubspec.lock
+
+# pubspec.lock is deliberately NOT ignored. This is an application, not a
+# library: CI resolves dependencies on every run, and without the lockfile a
+# transitive package can break the build with no commit to blame it on.
+
+# Android release signing — the keystore and its passwords never enter git.
+# See docs/RELEASING.md for how to create one and where CI reads it from.
+android/key.properties
+*.jks
+*.keystore
 
 # IDE and editor files
 .vscode/

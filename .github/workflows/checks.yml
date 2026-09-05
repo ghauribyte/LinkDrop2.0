@@ -1,0 +1,45 @@
+name: Checks
+
+# The fast gate. Runs on its own for day-to-day pushes, and is reused by
+# release.yml via workflow_call so a tag can never publish something that
+# doesn't analyze or pass its tests.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_call:
+
+jobs:
+  analyze-and-test:
+    runs-on: ubuntu-latest
+    # A hung test must fail in minutes, not sit until GitHub's 6-hour job
+    # ceiling. The whole suite runs in about ten seconds locally.
+    timeout-minutes: 15
+
+    # The git root is not the Flutter root: pubspec.yaml lives one level down
+    # in LinkDrop/. Every flutter/dart command has to run from there.
+    defaults:
+      run:
+        working-directory: LinkDrop
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          # Pinned rather than 'stable': a Flutter upgrade should be a commit
+          # someone made on purpose, not something that lands mid-release.
+          flutter-version: '3.44.2'
+          channel: stable
+          cache: true
+
+      - run: flutter pub get
+
+      # Exits non-zero on info-level lints too, which is why the CLI harness
+      # scripts at the repo root carry a file-local avoid_print ignore.
+      - run: flutter analyze
+
+      # Goldens are excluded: their pixels depend on the host's installed
+      # fonts, so they verify layout only on the machine that generated them.
+      # See dart_test.yaml and test/ui_golden_test.dart.
+      - run: flutter test --exclude-tags golden
