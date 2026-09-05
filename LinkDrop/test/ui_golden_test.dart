@@ -1,3 +1,11 @@
+// Tagged so CI can skip it (`flutter test --exclude-tags golden`). Golden
+// images depend on the host's font fallback — see the note below about Inter
+// — so a machine that isn't this one produces different pixels for reasons
+// that have nothing to do with the layout being verified. These stay a local
+// step where the PNGs are actually looked at.
+@Tags(['golden'])
+library;
+
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -12,6 +20,7 @@ import 'package:linkdrop/screens/join_hotspot_screen.dart';
 import 'package:linkdrop/screens/receive_screen.dart';
 import 'package:linkdrop/screens/received_files_screen.dart';
 import 'package:linkdrop/screens/send_screen.dart';
+import 'package:linkdrop/services/receiver_service.dart';
 import 'package:linkdrop/theme/linkdrop_theme.dart';
 
 /// Renders screens at the two canvases the design was drawn on
@@ -142,7 +151,13 @@ void main() {
     );
   });
 
+  // ReceiveScreen now renders ReceiverService's state, and that service is a
+  // process-wide singleton whose start is asynchronous — so without pinning
+  // it these goldens would race between "not listening" and "waiting" and
+  // change shot to shot. Started explicitly here so the captured frame is
+  // always the waiting state, which is the one worth reviewing.
   testWidgets('receive · desktop', (tester) async {
+    await tester.runAsync(() => ReceiverService.instance.ensureStarted());
     await pumpAt(tester, size: desktop, child: const ReceiveScreen());
     await expectLater(
       find.byType(ReceiveScreen),
@@ -151,13 +166,18 @@ void main() {
     await settleTimers(tester);
   });
 
+  // Deliberately does not stop-and-restart between the two receive goldens:
+  // stopping releases ports 7979/7980 and immediately rebinding them from the
+  // next test hangs. Started once, torn down after the last one that needs it.
   testWidgets('receive · phone', (tester) async {
+    await tester.runAsync(() => ReceiverService.instance.ensureStarted());
     await pumpAt(tester, size: phone, child: const ReceiveScreen());
     await expectLater(
       find.byType(ReceiveScreen),
       matchesGoldenFile('goldens/receive_phone.png'),
     );
     await settleTimers(tester);
+    await tester.runAsync(() => ReceiverService.instance.stop());
   });
 
   testWidgets('nearby · desktop', (tester) async {

@@ -360,7 +360,11 @@ class FingerprintText extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    // Hugs its content rather than filling the line. Expanded here forced the
+    // row to full width, which left it stranded against the left edge inside
+    // a centred column while everything around it was centred.
     return Row(
+      mainAxisSize: MainAxisSize.min,
       children: [
         Icon(Icons.fingerprint, size: 16, color: scheme.primary),
         const SizedBox(width: 8),
@@ -374,7 +378,7 @@ class FingerprintText extends StatelessWidget {
         ),
         if (note != null) ...[
           const SizedBox(width: 8),
-          Expanded(
+          Flexible(
             child: Text(
               note!,
               style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant),

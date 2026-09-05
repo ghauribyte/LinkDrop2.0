@@ -2,7 +2,9 @@ import 'package:flutter/material.dart';
 
 import 'navigation/rail_scope.dart';
 import 'screens/home_screen.dart';
+import 'services/receiver_service.dart';
 import 'theme/linkdrop_theme.dart';
+import 'widgets/consent_surface.dart';
 import 'widgets/linkdrop_shell.dart';
 
 void main() {
@@ -19,6 +21,29 @@ class LinkDropApp extends StatefulWidget {
 class _LinkDropAppState extends State<LinkDropApp> {
   final _navigatorKey = GlobalKey<NavigatorState>();
   int _railIndex = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    // The receiver outlives any single screen, so the accept/reject surface
+    // has to be reachable from the app rather than from ReceiveScreen's
+    // context — a transfer can now arrive while the user is looking at Send,
+    // Home, or anything else. ReceiverService refuses the batch outright if
+    // this is never wired, so a missing handler can never mean silent accept.
+    ReceiverService.instance.onIncomingRequest = (files, senderIp) async {
+      final context = _navigatorKey.currentContext;
+      if (context == null) return false;
+      return showIncomingRequest(
+        context,
+        files: files,
+        senderIp: senderIp,
+        destination:
+            ReceiverService.instance.receivedDir?.path ?? 'this device',
+        fingerprint: ReceiverService.instance.identity?.shortFingerprint,
+        senderIsPhone: false,
+      );
+    };
+  }
 
   /// Switching destinations returns to the root route first, so the rail
   /// selection always matches what is actually on screen.

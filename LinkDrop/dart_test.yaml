@@ -1,0 +1,8 @@
+# Declares the tags used in test/, so `flutter test` doesn't warn about an
+# unrecognised one.
+#
+# golden — renders screens to PNGs in test/goldens/. Excluded in CI
+# (`flutter test --exclude-tags golden`) because golden pixels depend on the
+# host's installed fonts; run it locally and look at the images.
+tags:
+  golden:
